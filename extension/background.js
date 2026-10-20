@@ -48,6 +48,7 @@ async function aiVariants(msg) {
     session,
     images: result.variants.filter((v) => NAME_RE.test(v.name)).map((v) => ({ name: v.name, label: v.label })),
     failed: result.failed.length,
+    failedReason: result.failed_reason || null,
   };
 }
 
