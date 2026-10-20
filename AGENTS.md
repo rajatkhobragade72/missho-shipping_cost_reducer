@@ -56,6 +56,9 @@ value, via the native value setter + input/change/blur) so the breakdown recalcu
 Optional "AI se alag photos" checkbox: background posts the original to the local tool
 (`/api/hero` + `/api/ai-variants`, key stays server-side; needs host permission 127.0.0.1:8000),
 tests each AI photo raw first, then border variants cycle over [original, ...AI photos].
+"Kul kitni photos" (cfg.tries) is the TOTAL including AI photos (user complaint: 53 became 73);
+only min(tries, 12) presets are requested. flux.2-klein-4b costs 0.005 pollen/image (not paid_only,
+60 rpm per user), so it runs on the free weekly pollen grant.
 Real page report (path `/panel/v3/new/cataloging/<id>/catalogs/single/add`, MUI): file inputs
 `#changeFrontImage` (front), `#addMoreImagesInput` (others, multiple), `#getFile` ("Add Product",
 excluded everywhere). Front thumbnails come from `upload.meeshosupplyassets.com` (allowed in

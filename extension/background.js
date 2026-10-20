@@ -36,7 +36,8 @@ async function aiVariants(msg) {
   const { session } = await (await local("/api/hero", { method: "POST", body: upload })).json();
   const form = new FormData();
   form.append("session", session);
-  config.ai_presets.forEach((p) => form.append("presets", p.key));
+  const max = Number.isInteger(msg.max) && msg.max > 0 ? msg.max : config.ai_presets.length;
+  config.ai_presets.slice(0, max).forEach((p) => form.append("presets", p.key));
   const result = await (await local("/api/ai-variants", { method: "POST", body: form })).json();
   return {
     session,

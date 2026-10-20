@@ -19,7 +19,8 @@
       "Exec(git status)",
       "Exec(Out-Null)",
       "Exec(Test-Path)",
-      "Exec(\"$env:TEMP\\shipharness\")"
+      "Exec(\"$env:TEMP\\shipharness\")",
+      "Exec($out.Substring)"
     ]
   }
 }

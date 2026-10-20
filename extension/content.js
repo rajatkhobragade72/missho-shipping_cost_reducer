@@ -465,7 +465,9 @@
     tip,
     card(btnHero,
       el("div", "Page ki front image use hogi. Chaho to yahan alag photo chuno:", "muted"), heroFile,
-      row(el("span", "Kitni try karein:"), triesInput, el("span", "Target ₹:"), targetInput),
+      row(el("span", "Kul kitni photos try karein (5-80):"), triesInput),
+      row(el("span", "Target shipping ₹:"), targetInput),
+      el("div", "Itna ya isse kam shipping milte hi ruk jayega. 0 = saari photos try karo.", "muted"),
       labelled(stickersBox, "Stickers / badges bhi try karo"),
       labelled(aiBox, "AI se alag photos bhi banao (local tool chalu hona chahiye)")),
     card(btnOthers, otherFiles, labelled(sameFrameBox, "Hero jaisa frame lagao")),
@@ -510,6 +512,8 @@
   async function saveCfg() {
     cfg.tries = clamp(triesInput.value, 5, 80, 30);
     cfg.target = clamp(targetInput.value, 0, 5000, 0);
+    triesInput.value = cfg.tries;
+    targetInput.value = cfg.target;
     cfg.stickers = stickersBox.checked;
     cfg.sameFrame = sameFrameBox.checked;
     cfg.useAI = aiBox.checked;
@@ -724,11 +728,11 @@
   }
 
   // Different-looking photos of the same product, made by the local tool's AI (Pollinations, key stays on the server).
-  async function aiSources(original) {
+  async function aiSources(original, max) {
     setStatus("AI se alag photos ban rahi hain (1-2 minute)...");
     try {
       const mime = /^image\/(jpeg|png|webp)$/.test(original.type) ? original.type : "image/jpeg";
-      const { session, images, failed } = await withKeepAlive(bg({ type: "aiVariants", b64: await fileToB64(original), mime }));
+      const { session, images, failed } = await withKeepAlive(bg({ type: "aiVariants", b64: await fileToB64(original), mime, max }));
       const photos = [];
       for (const img of images) {
         const { b64 } = await bg({ type: "localImage", session, name: img.name });
@@ -823,11 +827,12 @@
       addLog(fields.length ? `Har upload ke baad ye dobara bharenge: ${fields.join(", ")}` : "Price/weight box nahi mila (Setup me 'Pick price box' karo)");
     }
 
-    const aiPhotos = cfg.useAI ? await aiSources(original) : [];
+    // The user's number is the total: AI photos count towards it, border variants fill the rest.
+    const total = cfg.tries;
+    const aiPhotos = cfg.useAI ? (await aiSources(original, total)).slice(0, total) : [];
     const bitmaps = [await createImageBitmap(original)];
     for (const p of aiPhotos) bitmaps.push(await createImageBitmap(p.file));
     const seed = Math.floor(Math.random() * 1e6);
-    const total = aiPhotos.length + cfg.tries;
     let best = { cost: baseline, file: original, spec: null, label: "Original" };
     const results = [];
     let lastFile = original;
