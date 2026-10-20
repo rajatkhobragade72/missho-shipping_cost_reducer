@@ -3,52 +3,27 @@
 <head><meta charset="utf-8"><title>Fake Meesho panel</title></head>
 <body>
   <!--
-    Manual test page for extension/content.js. Serve this file next to a copy of
-    extension/content.js (e.g. copy both into a temp dir and run `python -m http.server`), open
-    /extension_harness.html (optionally ?method=drop) in a browser or headless Edge with
-    --dump-dom --virtual-time-budget=300000. The page title ends up as
+    Manual test page for extension/content.js, shaped like the real Meesho "Uploaded Images" block:
+    the front tile has no file input, only a "CHANGE" link that opens a popup (hidden input +
+    Save button); the shipping charge recalculates after Save. Serve this file next to a copy of
+    extension/content.js (temp dir + `python -m http.server`), open /extension_harness.html in
+    headless Edge with --dump-dom --virtual-time-budget=400000. The title ends up as
     "DONE hero=<result> | others=<n> | <status>".
   -->
-  <h3>Fake Meesho catalogue page</h3>
-  <div class="upload-box" id="box" style="border:2px dashed #999;padding:20px">
-    <input type="file" accept="image/jpeg,image/png" id="front" style="display:none">
-    <img id="preview" alt="">
+  <h3>Uploaded Images</h3>
+  <div id="images" style="display:flex;gap:16px">
+    <div class="tile">
+      <img id="front-img" alt="" width="100">
+      <p>Front Image<span style="color:red">*</span></p>
+      <span class="change" id="change" style="color:#33c;cursor:pointer">CHANGE</span>
+    </div>
   </div>
-  <button id="save" type="button">Save</button>
   <div class="breakdown">
+    <h4>Bank Settlement Breakdown</h4>
     <div><span>Meesho Price</span> <span>₹101</span></div>
-    <div id="ship"><span>Shipping (added separately)</span> <span id="ship-val">₹90</span></div>
+    <div><span>Shipping Charges</span> <span id="ship-val">₹90</span></div>
   </div>
-  <h4>Other images</h4>
-  <div id="others"></div>
   <script>
-    // Simulated Meesho: upload shows a preview; the charge only recalculates after "Save".
-    let pending = null;
-    const accept = (f) => { pending = f; document.getElementById("preview").src = URL.createObjectURL(f); };
-    document.getElementById("front").addEventListener("change", (e) => accept(e.target.files[0]));
-    const box = document.getElementById("box");
-    box.addEventListener("dragover", (e) => e.preventDefault());
-    box.addEventListener("drop", (e) => { e.preventDefault(); accept(e.dataTransfer.files[0]); });
-    document.getElementById("save").addEventListener("click", () => {
-      const f = pending;
-      if (!f) return;
-      setTimeout(() => {
-        const cost = f.name === "original.jpg" ? 90 : 40 + (f.size % 60);
-        document.getElementById("ship-val").textContent = `₹${cost}`;
-        window.__lastApplied = `${f.name} ${cost}`;
-      }, 1000);
-    });
-    window.__others = [];
-    for (let i = 0; i < 4; i++) {
-      const slot = document.createElement("div");
-      const input = Object.assign(document.createElement("input"), { type: "file", accept: "image/*" });
-      const img = document.createElement("img");
-      img.width = 40;
-      input.addEventListener("change", () => { img.src = URL.createObjectURL(input.files[0]); window.__others.push(input.files[0].name); });
-      slot.append(input, img);
-      document.getElementById("others").append(slot);
-    }
-
     function makeImage(color, w, h) {
       const c = document.createElement("canvas");
       c.width = w; c.height = h;
@@ -57,9 +32,52 @@
       x.fillStyle = color; x.fillRect(w * 0.2, h * 0.2, w * 0.6, h * 0.6);
       return new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
     }
-    makeImage("#c2185b", 600, 800).then((b) => { document.getElementById("preview").src = URL.createObjectURL(b); });
+    makeImage("#c2185b", 600, 600).then((b) => { document.getElementById("front-img").src = URL.createObjectURL(b); });
 
-    const method = new URLSearchParams(location.search).get("method") || "input";
+    // CHANGE -> popup with hidden input; picking a file shows a preview; Save applies it.
+    document.getElementById("change").addEventListener("click", () => {
+      const modal = document.createElement("div");
+      modal.className = "ReactModal__Content";
+      modal.setAttribute("role", "dialog");
+      modal.style.cssText = "position:fixed;top:40px;left:40px;background:#fff;border:1px solid #000;padding:12px";
+      const input = Object.assign(document.createElement("input"), { type: "file", accept: "image/*" });
+      input.style.display = "none";
+      const preview = Object.assign(document.createElement("img"), { width: 120 });
+      const save = Object.assign(document.createElement("button"), { textContent: "Save", type: "button" });
+      let file = null;
+      input.addEventListener("change", () => { file = input.files[0]; preview.src = URL.createObjectURL(file); });
+      save.addEventListener("click", () => {
+        if (!file) return;
+        document.getElementById("front-img").src = URL.createObjectURL(file);
+        modal.remove();
+        setTimeout(() => {
+          const cost = 40 + (file.size % 60);
+          document.getElementById("ship-val").textContent = `₹${cost}`;
+          window.__lastApplied = `${file.name} ${cost}`;
+        }, 1000);
+      });
+      modal.append(input, preview, save);
+      document.body.append(modal);
+      input.click();
+    });
+
+    // Other images: one "Add image" tile that keeps accepting files.
+    window.__others = [];
+    const add = document.createElement("div");
+    add.className = "tile";
+    const addInput = Object.assign(document.createElement("input"), { type: "file", accept: "image/*" });
+    add.append(addInput, Object.assign(document.createElement("p"), { textContent: "Add Image" }));
+    document.getElementById("images").append(add);
+    addInput.addEventListener("change", () => {
+      const f = addInput.files[0];
+      window.__others.push(f.name);
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      tile.append(Object.assign(document.createElement("img"), { src: URL.createObjectURL(f), width: 60 }),
+        Object.assign(document.createElement("p"), { textContent: `Image ${window.__others.length + 1}` }));
+      add.before(tile);
+    });
+
     const attach = Element.prototype.attachShadow;
     Element.prototype.attachShadow = function (opts) { return attach.call(this, { ...opts, mode: "open" }); };
     window.chrome = {
@@ -68,7 +86,7 @@
       storage: { local: {
         async get() {
           return { shipOptimizerCfg: { tries: 6, target: 0, stickers: true, sameFrame: true, waitSec: 3, stepWaitSec: 1,
-            uploadMethod: method, heroSelector: method === "drop" ? "#box" : "", steps: [{ selector: "#save", label: "Save" }] } };
+            uploadMethod: "input", steps: [] } };
         },
         async set() {},
       } },
@@ -92,7 +110,14 @@
       panel().querySelector("input[multiple]").files = dt.files;
       button("2.").click();
       await waitFor(/Photos laga di|nahi mila|nahi dikha|Pehle/);
+      button("Page report").click();
+      await new Promise((r) => setTimeout(r, 500));
+      window.__report = panel().querySelector("textarea").value;
       document.title = `DONE hero=${hero} [${window.__lastApplied}] | others=${window.__others.join(",")} | ${statusText()}`;
+      const pre = document.createElement("pre");
+      pre.id = "report";
+      pre.textContent = window.__report;
+      document.body.append(pre);
     })();
   </script>
 </body>

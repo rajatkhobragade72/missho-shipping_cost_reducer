@@ -44,6 +44,12 @@ textContent only) with two buttons:
    front `input[type=file]`, waits for text near "Shipping/Delivery ... ₹" to change/stabilise,
    keeps the cheapest and re-applies it (original if nothing is cheaper). Optional target ₹ stops early.
 2. Other photos: uploads chosen files into the remaining image inputs (optionally with the winning frame).
+Real panel (user screenshot): "Uploaded Images" block, front tile = thumbnail + "Front Image*" +
+"CHANGE" link (no visible file input), Image 2..n tiles, "Bank Settlement Breakdown" below. So the
+hero input is found via the "Front Image" tile; if none, the extension clicks CHANGE and grabs the
+file input it opens (capture-phase click listener + preventDefault, or a newly added input). With no
+custom steps, `autoConfirm` presses Save/Done/Crop/... inside visible dialogs (never "Submit").
+Setup has "Page report copy karo" (inputs, ₹ texts, dialogs, log) for remote debugging.
 Background worker only fetches the front image from `https://*.meesho.com` (CORS) and toggles the panel.
 Selectors auto-detect; Setup has pickers (hero box, other box, shipping ₹, post-upload click steps)
 stored in chrome.storage (`shipOptimizerCfg`).

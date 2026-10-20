@@ -77,13 +77,79 @@
     return null;
   }
 
-  const heroInput = () => inputFromPicked(cfg.heroSelector) || imageInputs()[0] || null;
+  const visible = (n) => !!n && n.getClientRects().length > 0;
+  const ownText = (n) => (n.textContent || "").replace(/\s+/g, " ").trim();
+
+  // Meesho shows "Front Image *" under the thumbnail with a "CHANGE" link (no visible file input).
+  function frontTile() {
+    const label = [...document.querySelectorAll("body *")].find((n) =>
+      !host.contains(n) && n.children.length <= 2 && /^front image\s*\*?$/i.test(ownText(n)) && visible(n));
+    if (!label) return null;
+    for (let n = label.parentElement, depth = 0; n && n !== document.body && depth < 4; n = n.parentElement, depth++) {
+      if (n.querySelector("img") && !/image\s*2/i.test(ownText(n))) return n;
+    }
+    return label.parentElement;
+  }
+
+  function changeLink(tile) {
+    const scope = tile?.parentElement || tile;
+    return scope ? [...scope.querySelectorAll("button, a, span, div, p, [role=button]")]
+      .find((n) => /^(change|edit|replace)$/i.test(ownText(n)) && visible(n)) || null : null;
+  }
+
+  function heroInput() {
+    const picked = inputFromPicked(cfg.heroSelector);
+    if (picked) return picked;
+    const tile = frontTile();
+    if (tile) return tile.querySelector("input[type=file]") || null;
+    return imageInputs().find((i) => !i.multiple) || imageInputs()[0] || null;
+  }
+
+  // Clicks the "CHANGE" link and grabs the file input it opens, without showing the OS file dialog.
+  async function heroInputViaChange() {
+    const link = changeLink(frontTile());
+    if (!link) return null;
+    let caught = null;
+    const onClick = (e) => {
+      if (e.target instanceof HTMLInputElement && e.target.type === "file") { caught = e.target; e.preventDefault(); }
+    };
+    const before = new Set(imageInputs());
+    document.addEventListener("click", onClick, true);
+    try {
+      link.click();
+      for (let t = 0; t < 10 && !caught; t++) {
+        await sleep(400);
+        const fresh = imageInputs().find((i) => !before.has(i));
+        if (fresh) return fresh;
+      }
+    } finally {
+      document.removeEventListener("click", onClick, true);
+    }
+    return caught;
+  }
 
   function otherInputs() {
     const picked = inputFromPicked(cfg.otherSelector);
     if (picked) return [picked];
     const hero = heroInput();
-    return imageInputs().filter((i) => i !== hero);
+    const tile = frontTile();
+    return imageInputs().filter((i) => i !== hero && !tile?.contains(i));
+  }
+
+  const CONFIRM_RE = /^(save|done|apply|crop|crop & save|save & continue|confirm|ok|okay|upload|use (this )?image|continue|proceed)$/i;
+  const DIALOG_SEL = "[role=dialog], [aria-modal=true], [class*=modal i], [class*=dialog i], [class*=popup i], [class*=drawer i]";
+
+  // After an upload Meesho may open a crop/preview popup. Press its Save/Done (never "Submit").
+  async function autoConfirm() {
+    for (let round = 0; round < 3; round++) {
+      await sleep(1200);
+      const btn = [...document.querySelectorAll(DIALOG_SEL)].filter((d) => visible(d) && !host.contains(d))
+        .flatMap((d) => [...d.querySelectorAll("button, [role=button]")])
+        .find((b) => visible(b) && !b.disabled && CONFIRM_RE.test(ownText(b)));
+      if (!btn) return;
+      addLog(`Popup me "${ownText(btn)}" dabaya`);
+      btn.click();
+    }
   }
 
   function dropTarget(input, selector) {
@@ -128,6 +194,8 @@
   }
 
   function heroPreviewSrc() {
+    const tileImg = [...(frontTile()?.querySelectorAll("img") || [])].find((i) => i.naturalWidth >= 100);
+    if (tileImg) return tileImg.currentSrc || tileImg.src;
     const input = heroInput();
     for (let n = input?.parentElement, depth = 0; n && n !== document.body && depth < 6; n = n.parentElement, depth++) {
       const img = [...n.querySelectorAll("img")].find((i) => i.naturalWidth >= 150 && i.naturalHeight >= 150);
@@ -287,6 +355,7 @@
     progress{width:100%}
     input[type=number]{width:52px}
     input[type=file]{font-size:11px;max-width:100%}
+    textarea{width:100%;box-sizing:border-box;font:11px monospace}
     details summary{cursor:pointer;color:#9f2089;font-size:12px}
     details .card{margin-top:6px;background:#fafafa}
     ol{margin:0;padding-left:18px;font-size:12px;max-height:160px;overflow:auto}
@@ -344,6 +413,8 @@
   const stepsList = el("ol");
   const btnAddStep = el("button", "+ Upload ke baad click step", "ghost");
   const btnClearSteps = el("button", "Steps clear", "ghost");
+  const btnReport = el("button", "Page report copy karo", "ghost");
+  const reportBox = Object.assign(el("textarea", null, "hidden"), { readOnly: true, rows: 6 });
 
   const setup = el("details");
   setup.append(el("summary", "Setup (sirf agar auto-detect kaam na kare)"), card(
@@ -351,6 +422,8 @@
     row(el("span", "Min wait (sec):"), waitInput, el("span", "Step wait:"), stepWaitInput),
     el("div", "Agar image upload ke baad Meesho me Save / Done / Crop dabana padta hai, to '+ step' se wo button pick karo.", "muted"),
     stepsList, row(btnAddStep, btnClearSteps),
+    el("div", "Kaam na kare to ye report copy karke developer ko bhejo (isme koi password/login nahi hota):", "muted"),
+    btnReport, reportBox,
   ));
 
   body.append(
@@ -392,7 +465,7 @@
   function refreshDetect() {
     const cost = readCost();
     detectInfo.textContent =
-      `Hero box: ${heroInput() ? "mil gaya" : "NAHI mila"} | Other photo box: ${otherInputs().length} | ` +
+      `Hero: ${heroInput() ? "box mil gaya" : changeLink(frontTile()) ? "CHANGE se" : "NAHI mila"} | Other photo box: ${otherInputs().length} | ` +
       `Shipping: ${cost !== null ? "₹" + cost : "nahi dikh raha"}`;
   }
 
@@ -474,6 +547,7 @@
   }
 
   async function runSteps() {
+    if (!cfg.steps.length) return autoConfirm();
     for (const step of cfg.steps) {
       if (stopRequested) return;
       const start = Date.now();
@@ -508,7 +582,9 @@
   async function tryHero(file) {
     const prevEl = findCostEl();
     const prevText = prevEl ? prevEl.textContent.trim() : null;
-    const uploaded = await putFiles(heroInput(), cfg.heroSelector, [file]);
+    const input = heroInput() || (cfg.uploadMethod === "input" ? await heroInputViaChange() : null);
+    if (!input && cfg.uploadMethod === "input") throw new Error("Front image ka upload box nahi mila (CHANGE dabane par bhi). Setup me 'Page report copy karo' dabao aur report bhejo.");
+    const uploaded = await putFiles(input, cfg.heroSelector, [file]);
     await runSteps();
     const cost = await waitForCost(prevText);
     return { cost, uploaded };
@@ -545,7 +621,7 @@
     result.classList.add("hidden");
     btnDownload.classList.add("hidden");
     log.replaceChildren();
-    if (!heroInput() && cfg.uploadMethod === "input") throw new Error("Front image ka upload box nahi mila. Meesho ka image upload wala page kholo, ya Setup me 'Pick hero upload box' karo.");
+    if (!heroInput() && !changeLink(frontTile()) && cfg.uploadMethod === "input") throw new Error("Front image nahi mili. Meesho ka catalog page kholo (jahan 'Front Image' dikhe), ya Setup me 'Pick hero upload box' karo.");
 
     let original = heroFile.files[0] || null;
     let baseline = null;
@@ -645,6 +721,29 @@
     else setStatus("Photos laga di. Form check karke Submit karo.");
   }
 
+  function pageReport() {
+    const short = (s, n = 80) => (s || "").replace(/\s+/g, " ").trim().slice(0, n);
+    const tile = frontTile();
+    const lines = [
+      `path: ${location.pathname}`,
+      `frontTile: ${tile ? short(tile.outerHTML.replace(/src="[^"]*"/g, 'src=".."'), 300) : "none"}`,
+      `changeLink: ${changeLink(tile) ? cssPath(changeLink(tile)) : "none"}`,
+      `heroInput: ${heroInput() ? cssPath(heroInput()) : "none"}`,
+      `cost: ${readCost()} via ${findCostEl() ? cssPath(findCostEl()) : "none"}`,
+      "fileInputs:",
+      ...[...document.querySelectorAll("input[type=file]")].map((i) =>
+        ` - ${cssPath(i)} accept=${i.accept} multiple=${i.multiple} near="${short(i.parentElement?.parentElement?.textContent, 50)}"`),
+      "rupeeTexts:",
+      ...[...document.querySelectorAll("body *")].filter((n) => !host.contains(n) && n.children.length === 0 && n.textContent.includes("₹"))
+        .slice(0, 25).map((n) => ` - "${short(n.parentElement?.parentElement?.textContent, 90)}"`),
+      `dialogs: ${[...document.querySelectorAll(DIALOG_SEL)].filter(visible).map((d) => short(d.textContent, 60)).join(" || ") || "none"}`,
+      `cfg: steps=${cfg.steps.length} method=${cfg.uploadMethod} picked=${[cfg.heroSelector, cfg.otherSelector, cfg.costSelector].map(Boolean)}`,
+      "log:", ...[...log.children].slice(0, 15).map((li) => ` - ${li.textContent}`),
+      `status: ${status.textContent}`,
+    ];
+    return lines.join("\n");
+  }
+
   async function guarded(fn) {
     if (running) return;
     await saveCfg();
@@ -688,6 +787,17 @@
       renderSteps();
       setStatus(`Step add hua: ${describe(button)}`);
     });
+  });
+  btnReport.addEventListener("click", async () => {
+    reportBox.value = pageReport();
+    reportBox.classList.remove("hidden");
+    reportBox.select();
+    try {
+      await navigator.clipboard.writeText(reportBox.value);
+      setStatus("Report copy ho gayi. Chat me paste karke bhejo.");
+    } catch {
+      setStatus("Neeche ki report select karke Ctrl+C karo.");
+    }
   });
   btnClearSteps.addEventListener("click", async () => {
     cfg.steps = [];
