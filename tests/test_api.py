@@ -114,6 +114,15 @@ def test_ai_requires_key(client):
     assert res.status_code == 503
 
 
+def test_ai_presets_strip_text_and_flag_lifestyle(client):
+    presets = {p["key"]: p for p in client.get("/api/config").json()["ai_presets"]}
+    assert presets["lifestyle"]["hero"] is False
+    assert presets["clean-white"]["hero"] is True
+    for key, (_, prompt) in ai.PRESETS.items():
+        assert "no text or letters" in prompt and "texture" in prompt
+        assert ("No hands" in prompt) == (key not in ai.NON_HERO_PRESETS)
+
+
 def test_ai_variants_success_and_partial_failure(client, monkeypatch):
     monkeypatch.setenv("POLLINATIONS_API_KEY", "FAKE-KEY-FOR-TESTING")
     generated = BytesIO()

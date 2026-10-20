@@ -131,7 +131,7 @@ def _style_variant(session_dir: Path, subject: imaging.Image.Image, style: imagi
 def get_config():
     return {
         "ai_configured": ai.is_configured(),
-        "ai_presets": [{"key": k, "label": v[0]} for k, v in ai.PRESETS.items()],
+        "ai_presets": [{"key": k, "label": v[0], "hero": k not in ai.NON_HERO_PRESETS} for k, v in ai.PRESETS.items()],
     }
 
 

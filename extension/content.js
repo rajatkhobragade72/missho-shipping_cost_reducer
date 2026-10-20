@@ -27,7 +27,10 @@
     waitSec: 6,
     stepWaitSec: 2,
     tries: 30,
-    stickers: true,
+    stickers: false,
+    look: "nice",
+    extrasMode: "make",
+    fourth: "size",
     target: 0,
     sameFrame: true,
   };
@@ -242,13 +245,43 @@
     };
   }
 
-  function variantSpec(i, seed, withStickers) {
+  // "Sundar" look: soft palettes, thin lines, rounded white card with a soft shadow, square output.
+  const PALETTES = [
+    { name: "blush", bg: "#fde2e4", accent: "#c9184a" },
+    { name: "mint", bg: "#d8f3dc", accent: "#2d6a4f" },
+    { name: "sky", bg: "#dbeafe", accent: "#1e40af" },
+    { name: "lavender", bg: "#ede9fe", accent: "#6d28d9" },
+    { name: "peach", bg: "#ffe5d0", accent: "#c2410c" },
+    { name: "cream-gold", bg: "#fdf6e3", accent: "#a67c00" },
+    { name: "grey", bg: "#f1f3f5", accent: "#343a40" },
+    { name: "teal", bg: "#ccfbf1", accent: "#0f766e" },
+    { name: "pink", bg: "#fce7f3", accent: "#9f2089" },
+  ];
+  const NICE_STYLES = ["pastel-card", "thin-frame", "gradient-card", "corner-accents", "accent-card", "double-line", "dots-card", "band"];
+  const NICE_PADS = [0.05, 0.07, 0.09];
+  const NICE_SCALES = [0.9, 0.95, 1];
+  const NICE_STICKERS = ["BESTSELLER", "NEW", "PREMIUM", "TRENDING"];
+  const NICE_SIDE = 1100;
+
+  function variantSpec(i, seed, withStickers, look = "nice") {
     const r = rng(seed * 1000 + i);
     const pick = (arr) => arr[Math.floor(r() * arr.length)];
+    if (look === "nice") {
+      return {
+        mode: "nice",
+        style: NICE_STYLES[i % NICE_STYLES.length],
+        palette: PALETTES[(Math.floor(i / NICE_STYLES.length) * 4 + Math.floor(r() * PALETTES.length)) % PALETTES.length],
+        pad: pick(NICE_PADS),
+        scale: pick(NICE_SCALES),
+        sticker: withStickers && i % 4 === 3 ? pick(NICE_STICKERS) : null,
+        corner: pick(["tl", "tr"]),
+      };
+    }
     const c1 = pick(COLORS);
     let c2 = pick(COLORS);
     while (c2 === c1) c2 = pick(COLORS);
     return {
+      mode: "variety",
       pattern: PATTERNS[i % PATTERNS.length],
       width: WIDTHS[Math.floor(i / PATTERNS.length) % WIDTHS.length],
       c1, c2,
@@ -258,7 +291,129 @@
   }
 
   function specLabel(s) {
+    if (s.mode === "nice") return `${s.style} ${s.palette.name}${s.sticker ? ` + "${s.sticker}"` : ""}`;
     return `${s.pattern} border ${Math.round(s.width * 100)}%${s.sticker ? ` + "${s.sticker}"` : ""}`;
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+  }
+
+  function paintNice(ctx, S, s) {
+    const { bg, accent } = s.palette;
+    const pad = Math.round(S * s.pad);
+    const card = { x: pad, y: pad, w: S - 2 * pad, h: S - 2 * pad, r: Math.round(S * 0.04) };
+    const shadowCard = () => {
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.18)";
+      ctx.shadowBlur = S * 0.03;
+      ctx.shadowOffsetY = S * 0.01;
+      ctx.fillStyle = "#ffffff";
+      roundRect(ctx, card.x, card.y, card.w, card.h, card.r);
+      ctx.fill();
+      ctx.restore();
+    };
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, S, S);
+    if (s.style === "pastel-card" || s.style === "dots-card") {
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, S, S);
+      if (s.style === "dots-card") {
+        ctx.fillStyle = accent;
+        ctx.globalAlpha = 0.12;
+        const step = S * 0.04;
+        for (let y = step / 2; y < S; y += step) for (let x = step / 2; x < S; x += step) {
+          ctx.beginPath();
+          ctx.arc(x, y, S * 0.005, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+      shadowCard();
+    } else if (s.style === "gradient-card") {
+      const g = ctx.createLinearGradient(0, 0, S, S);
+      g.addColorStop(0, bg);
+      g.addColorStop(1, "#ffffff");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, S, S);
+      shadowCard();
+    } else if (s.style === "accent-card") {
+      ctx.fillStyle = accent;
+      ctx.fillRect(0, 0, S, S);
+      shadowCard();
+      ctx.strokeStyle = bg;
+      ctx.lineWidth = S * 0.004;
+      roundRect(ctx, card.x + S * 0.015, card.y + S * 0.015, card.w - S * 0.03, card.h - S * 0.03, card.r * 0.7);
+      ctx.stroke();
+    } else if (s.style === "thin-frame" || s.style === "double-line") {
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = S * 0.006;
+      ctx.strokeRect(pad / 2, pad / 2, S - pad, S - pad);
+      if (s.style === "double-line") {
+        ctx.strokeStyle = bg;
+        ctx.lineWidth = S * 0.012;
+        ctx.strokeRect(pad / 2 + S * 0.016, pad / 2 + S * 0.016, S - pad - S * 0.032, S - pad - S * 0.032);
+      }
+    } else if (s.style === "corner-accents") {
+      const len = S * 0.12;
+      const o = pad / 2;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = S * 0.012;
+      ctx.lineCap = "round";
+      for (const [x, y, dx, dy] of [[o, o, 1, 1], [S - o, o, -1, 1], [o, S - o, 1, -1], [S - o, S - o, -1, -1]]) {
+        ctx.beginPath();
+        ctx.moveTo(x, y + dy * len);
+        ctx.lineTo(x, y);
+        ctx.lineTo(x + dx * len, y);
+        ctx.stroke();
+      }
+    } else if (s.style === "band") {
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, S, pad * 0.6);
+      ctx.fillRect(0, S - pad * 0.6, S, pad * 0.6);
+      ctx.fillStyle = accent;
+      ctx.fillRect(0, pad * 0.6, S, S * 0.005);
+      ctx.fillRect(0, S - pad * 0.6 - S * 0.005, S, S * 0.005);
+    }
+    return card;
+  }
+
+  function paintNiceSticker(ctx, S, s) {
+    const h = S * 0.06;
+    ctx.font = `bold ${Math.round(S * 0.028)}px Arial, sans-serif`;
+    const w = ctx.measureText(s.sticker).width + S * 0.05;
+    const m = S * s.pad + S * 0.025;
+    const x = s.corner === "tl" ? m : S - m - w;
+    ctx.fillStyle = s.palette.accent;
+    roundRect(ctx, x, m, w, h, h / 2);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(s.sticker, x + w / 2, m + h / 2 + 1);
+  }
+
+  function renderNice(bitmap, spec, name) {
+    const S = NICE_SIDE;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = S;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    const card = paintNice(ctx, S, spec);
+    const inset = S * 0.02;
+    const aw = card.w - 2 * inset;
+    const ah = card.h - 2 * inset;
+    const fit = Math.min(aw / bitmap.width, ah / bitmap.height) * spec.scale;
+    const dw = bitmap.width * fit;
+    const dh = bitmap.height * fit;
+    ctx.save();
+    roundRect(ctx, card.x, card.y, card.w, card.h, card.r);
+    ctx.clip();
+    ctx.drawImage(bitmap, card.x + (card.w - dw) / 2, card.y + (card.h - dh) / 2, dw, dh);
+    ctx.restore();
+    if (spec.sticker) paintNiceSticker(ctx, S, spec);
+    return toJpeg(canvas, name);
   }
 
   function tile(size, draw) {
@@ -333,6 +488,7 @@
   }
 
   function renderVariant(bitmap, spec, name) {
+    if (spec.mode === "nice") return renderNice(bitmap, spec, name);
     const [w, h] = canvasSize(bitmap);
     const canvas = document.createElement("canvas");
     canvas.width = w;
@@ -372,7 +528,9 @@
     .muted{color:#666;font-size:12px}
     .err{color:#b00020;font-weight:600}
     .result{background:#e8f5e9;border:1px solid #1b8a3a;border-radius:8px;padding:8px;color:#1b5e20;font-weight:700;font-size:14px}
-    .choices{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+    .body{overflow-x:hidden}
+    select{width:100%;max-width:100%;font-size:12px}
+    .choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
     .choice{border:2px solid #eee;border-radius:8px;padding:4px;display:grid;gap:3px;text-align:center;font-size:11px;background:#fff}
     .choice.on{border-color:#1b8a3a;background:#e8f5e9}
     .choice img{width:100%;aspect-ratio:1;object-fit:contain;background:#fafafa;border-radius:4px;cursor:zoom-in}
@@ -413,10 +571,27 @@
   const triesInput = numInput(5, 80);
   const targetInput = numInput(0, 5000);
   const stickersBox = checkbox();
+  const lookSelect = el("select");
+  [["nice", "Look: Sundar (recommended)"], ["variety", "Look: Rang-birange (zyada variety)"]]
+    .forEach(([v, t]) => { const o = el("option", t); o.value = v; lookSelect.append(o); });
+  const btnPreview = el("button", "Pehle look dekho (upload nahi hoga)", "ghost");
+  let previewSeed = null;
 
-  const btnOthers = el("button", "2. Baaki photos lagao", "big");
+  const btnOthers = el("button", "2. Baaki photos banao / lagao", "big");
   const otherFiles = Object.assign(el("input"), { type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true });
   const sameFrameBox = checkbox();
+  const extrasModeSelect = el("select");
+  [["make", "Meri asli photo se banao: angle, close-up, size/daily use"], ["asis", "Meri chuni photos waise hi lagao"]]
+    .forEach(([v, t]) => { const o = el("option", t); o.value = v; extrasModeSelect.append(o); });
+  const fourthSelect = el("select");
+  [["size", "Chauthi photo: Size chart (bina AI)"], ["daily", "Chauthi photo: Daily use (AI, local tool chahiye)"]]
+    .forEach(([v, t]) => { const o = el("option", t); o.value = v; fourthSelect.append(o); });
+  const sizeL = numInput(1, 1000);
+  const sizeW = numInput(1, 1000);
+  const extrasBox = el("div", null, "choices");
+  const btnUploadExtras = el("button", "Chuni hui photos Meesho par lagao");
+  const extrasWrap = el("div", null, "hidden");
+  extrasWrap.append(el("div", "Baaki photos preview (photo par click = badi dikhegi):", "muted"), extrasBox, btnUploadExtras);
   const aiBox = checkbox();
   const refreshPriceBox = checkbox();
 
@@ -468,9 +643,15 @@
       row(el("span", "Kul kitni photos try karein (5-80):"), triesInput),
       row(el("span", "Target shipping ₹:"), targetInput),
       el("div", "Itna ya isse kam shipping milte hi ruk jayega. 0 = saari photos try karo.", "muted"),
-      labelled(stickersBox, "Stickers / badges bhi try karo"),
+      lookSelect, btnPreview,
+      labelled(stickersBox, "Badge bhi lagao (BESTSELLER / NEW) - Meesho QC kabhi reject kar sakta hai"),
       labelled(aiBox, "AI se alag photos bhi banao (local tool chalu hona chahiye)")),
-    card(btnOthers, otherFiles, labelled(sameFrameBox, "Hero jaisa frame lagao")),
+    card(btnOthers,
+      el("div", "Apne product ki ASLI photos chuno (1 ya zyada). 2nd photo = doosra angle, agar ho.", "muted"), otherFiles,
+      extrasModeSelect, fourthSelect,
+      row(el("span", "Size (cm): Lambaai"), sizeL, el("span", "Chaudaai"), sizeW),
+      labelled(sameFrameBox, "Hero jaisa frame lagao (sirf 'waise hi' mode me)"),
+      extrasWrap),
     row(btnStop, btnDownload), progress, status, result, choicesTitle, choices, log, setup,
   );
   box.append(head, body);
@@ -515,6 +696,9 @@
     triesInput.value = cfg.tries;
     targetInput.value = cfg.target;
     cfg.stickers = stickersBox.checked;
+    cfg.look = lookSelect.value === "variety" ? "variety" : "nice";
+    cfg.extrasMode = extrasModeSelect.value === "asis" ? "asis" : "make";
+    cfg.fourth = fourthSelect.value === "daily" ? "daily" : "size";
     cfg.sameFrame = sameFrameBox.checked;
     cfg.useAI = aiBox.checked;
     cfg.refreshPrice = refreshPriceBox.checked;
@@ -526,7 +710,7 @@
 
   function setBusy(busy) {
     running = busy;
-    [btnHero, btnOthers, btnAddStep, btnPickHero, btnPickOther, btnPickCost, btnPickPrice].forEach((b) => { b.disabled = busy; });
+    [btnHero, btnOthers, btnPreview, btnUploadExtras, btnAddStep, btnPickHero, btnPickOther, btnPickCost, btnPickPrice].forEach((b) => { b.disabled = busy; });
     btnStop.disabled = false;
     btnStop.textContent = "Stop";
     btnStop.classList.toggle("hidden", !busy);
@@ -769,7 +953,10 @@
   }
 
   // Gallery of the cheapest images so the user can choose which one goes on the listing.
-  function renderChoices(list, appliedFile, baseline) {
+  const CHOICES_TITLE = "Sabse sasti photos: jo pasand ho uspar 'Ye lagao' dabao (photo par click = badi dikhegi)";
+
+  function renderChoices(list, appliedFile, baseline, title = CHOICES_TITLE) {
+    choicesTitle.textContent = title;
     choiceUrls.forEach((u) => URL.revokeObjectURL(u));
     choiceUrls = [];
     choices.replaceChildren();
@@ -779,27 +966,48 @@
       const url = URL.createObjectURL(item.file);
       choiceUrls.push(url);
       const shownCost = item.confirmed ?? item.cost;
+      const costText = shownCost === undefined ? "Test nahi hua" : `₹${shownCost}`;
       const card = el("div", null, `choice${item.file === appliedFile ? " on" : ""}`);
       const img = Object.assign(el("img"), { src: url, alt: item.label, title: item.label });
       img.addEventListener("click", () => zoom(url));
       const apply = el("button", item.file === appliedFile ? "Laga hua hai" : "Ye lagao");
       const save = el("button", "Download", "ghost");
       apply.addEventListener("click", () => guarded(async () => {
+        if (item.ai && !window.confirm("Ye AI ki banai photo hai. Isme product ka texture/size badla ho sakta hai ya ajeeb text aa sakta hai. Photo badi karke check kar li? Phir bhi lagayein?")) return;
         setStatus(`${item.label} laga rahe hain...`);
         const { cost } = await tryHero(item.file);
         if (cost !== null) item.confirmed = cost;
-        winner = { ...item, cost: cost ?? shownCost };
+        winner = { ...item, cost: cost ?? shownCost ?? "?" };
         btnDownload.classList.remove("hidden");
-        showResult(`Laga di: ₹${winner.cost}${baseline ? `  (original ₹${baseline})` : ""}`);
+        showResult(`Laga di: shipping ₹${winner.cost}${baseline ? `  (original ₹${baseline})` : ""}`);
         setStatus(`Laga di: ${item.label}. Ab form check karke khud Submit karo.`);
-        renderChoices(list, item.file, baseline);
+        renderChoices(list, item.file, baseline, title);
       }));
-      save.addEventListener("click", () => downloadFile(item.file, `meesho_hero_rs${shownCost}.jpg`));
-      card.append(img, el("div", `₹${shownCost}`, "cost"),
-        el("div", item.confirmed !== undefined && item.confirmed !== item.cost ? `(pehli baar ₹${item.cost})` : item.confirmed !== undefined ? "confirm ✓" : " ", "muted"),
+      save.addEventListener("click", () => downloadFile(item.file, shownCost === undefined ? `meesho_hero_${item.file.name}` : `meesho_hero_rs${shownCost}.jpg`));
+      card.append(img, el("div", costText, "cost"),
+        item.ai ? el("div", "AI ⚠ product/text check karo", "err") :
+          el("div", item.confirmed !== undefined && item.confirmed !== item.cost ? `(pehli baar ₹${item.cost})` : item.confirmed !== undefined ? "confirm ✓" : " ", "muted"),
         apply, save);
       choices.append(card);
     }
+  }
+
+  // Shows how the first few variations will look, without uploading anything.
+  async function previewLooks() {
+    const source = heroFile.files[0] || await pageHeroFile();
+    if (!source) throw new Error("Photo nahi mili. Upar 'Choose file' se hero photo chuno.");
+    setStatus("Look bana rahe hain...");
+    const bitmap = await createImageBitmap(source);
+    previewSeed = Math.floor(Math.random() * 1e6);
+    const list = [];
+    for (let k = 0; k < MAX_CHOICES; k++) {
+      const spec = variantSpec(k, previewSeed, cfg.stickers, cfg.look);
+      list.push({ file: await renderVariant(bitmap, spec, `look_${k + 1}.jpg`), spec, label: `#${k + 1} ${specLabel(spec)}` });
+    }
+    bitmap.close();
+    result.classList.add("hidden");
+    renderChoices(list, null, null, "Look preview (abhi Meesho par test nahi hui). Photo par click = badi dikhegi. 'Ye lagao' = seedha laga ke shipping dekho.");
+    setStatus("Ye pehli 6 photos ka look hai. Pasand aaye to '1. Hero image...' dabao (yahi look try honge), nahi to dobara 'Pehle look dekho' dabao.");
   }
 
   // ---------- flow 1: optimize hero ----------
@@ -832,7 +1040,8 @@
     const aiPhotos = cfg.useAI ? (await aiSources(original, total)).slice(0, total) : [];
     const bitmaps = [await createImageBitmap(original)];
     for (const p of aiPhotos) bitmaps.push(await createImageBitmap(p.file));
-    const seed = Math.floor(Math.random() * 1e6);
+    const seed = previewSeed ?? Math.floor(Math.random() * 1e6);
+    previewSeed = null;
     let best = { cost: baseline, file: original, spec: null, label: "Original" };
     const results = [];
     let lastFile = original;
@@ -843,17 +1052,20 @@
     let stuck = false;
     progress.max = total;
     for (let i = 0; i < total && !stopRequested; i++) {
-      let file, spec = null, label;
+      // AI photos can redraw the product (texture/size) or garble text, so they are only offered in the
+      // gallery for the user to judge; auto-apply only uses images built from the untouched original.
+      let file, spec = null, label, ai = true;
       if (i < aiPhotos.length) {
         ({ file, label } = aiPhotos[i]);
       } else {
         const k = i - aiPhotos.length;
         const src = k % bitmaps.length;
-        spec = variantSpec(k, seed, cfg.stickers);
-        label = `#${k + 1} ${src ? `AI photo ${src} + ` : ""}${specLabel(spec)}`;
+        ai = src !== 0;
+        spec = variantSpec(k, seed, cfg.stickers, cfg.look);
+        label = `#${k + 1} ${ai ? `AI photo ${src} + ` : ""}${specLabel(spec)}`;
         file = await renderVariant(bitmaps[src], spec, `hero_${k + 1}.jpg`);
       }
-      setStatus(`${i + 1}/${total} try ho rahi hai... (abhi tak best ₹${best.cost})`);
+      setStatus(`${i + 1}/${total} try ho rahi hai... (asli photo ka best ₹${best.cost})`);
       const { cost, uploaded, frontChanged } = await tryHero(file);
       lastFile = file;
       progress.value = i + 1;
@@ -864,9 +1076,10 @@
         readFails++;
         addLog(`${label}: cost nahi padh paya${savedNote}`);
       } else {
-        addLog(`${label}: ₹${cost}${cost < best.cost ? "  ← naya best" : ""}${savedNote}`);
-        if (cost < best.cost) best = { cost, file, spec, label };
-        if (cost < baseline) results.push({ cost, file, spec, label });
+        const mark = cost < best.cost ? (ai ? "  ← sasta par AI (khud check karo)" : "  ← naya best") : "";
+        addLog(`${label}: ₹${cost}${mark}${savedNote}`);
+        if (!ai && cost < best.cost) best = { cost, file, spec, label };
+        if (cost < baseline) results.push({ cost, file, spec, label, ai });
         if (cost === baseline) sameAsOriginal++;
       }
       if (i === 4 && sameAsOriginal === 5) { stuck = true; break; }
@@ -881,7 +1094,7 @@
     // the one that is cheapest on the second reading too.
     const wasStopped = stopRequested;
     stopRequested = false;
-    const candidates = results.sort((a, b) => a.cost - b.cost).slice(0, wasStopped ? 1 : CONFIRM_TOP);
+    const candidates = results.filter((r) => !r.ai).sort((a, b) => a.cost - b.cost).slice(0, wasStopped ? 1 : CONFIRM_TOP);
     let confirmed = null;
     for (const [n, c] of candidates.entries()) {
       setStatus(`Confirm kar rahe hain ${n + 1}/${candidates.length}: ${c.label} (pehle ₹${c.cost})...`);
@@ -925,7 +1138,163 @@
   }
 
   // ---------- flow 2: other photos ----------
+  // Photo 2 = another angle, photo 3 = close-up of the real texture, photo 4 = size chart or daily use.
+  const EXTRA_SIDE = 1100;
+
+  function squareCanvas() {
+    const c = document.createElement("canvas");
+    c.width = c.height = EXTRA_SIDE;
+    const ctx = c.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, EXTRA_SIDE, EXTRA_SIDE);
+    return [c, ctx];
+  }
+
+  function drawContain(ctx, bitmap, x, y, w, h) {
+    const fit = Math.min(w / bitmap.width, h / bitmap.height);
+    const dw = bitmap.width * fit;
+    const dh = bitmap.height * fit;
+    ctx.drawImage(bitmap, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+    return { x: x + (w - dw) / 2, y: y + (h - dh) / 2, w: dw, h: dh };
+  }
+
+  async function cleanSquare(bitmap, name) {
+    const [c, ctx] = squareCanvas();
+    const m = EXTRA_SIDE * 0.04;
+    drawContain(ctx, bitmap, m, m, EXTRA_SIDE - 2 * m, EXTRA_SIDE - 2 * m);
+    return toJpeg(c, name);
+  }
+
+  // Real pixels only: a zoomed crop from the middle of the photo shows the actual fabric/finish.
+  async function closeUp(bitmap, name, zoomPart = 0.42) {
+    const [c, ctx] = squareCanvas();
+    const side = Math.min(bitmap.width, bitmap.height) * zoomPart;
+    ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, EXTRA_SIDE, EXTRA_SIDE);
+    return toJpeg(c, name);
+  }
+
+  function arrow(ctx, x1, y1, x2, y2) {
+    const head = EXTRA_SIDE * 0.02;
+    const ang = Math.atan2(y2 - y1, x2 - x1);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    for (const [x, y, a] of [[x1, y1, ang], [x2, y2, ang + Math.PI]]) {
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + head * Math.cos(a + 0.5), y + head * Math.sin(a + 0.5));
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + head * Math.cos(a - 0.5), y + head * Math.sin(a - 0.5));
+    }
+    ctx.stroke();
+  }
+
+  async function sizeChart(bitmap, lengthCm, widthCm, name) {
+    const [c, ctx] = squareCanvas();
+    const S = EXTRA_SIDE;
+    const box = drawContain(ctx, bitmap, S * 0.1, S * 0.08, S * 0.72, S * 0.72);
+    ctx.strokeStyle = "#333333";
+    ctx.fillStyle = "#333333";
+    ctx.lineWidth = S * 0.004;
+    ctx.font = `bold ${Math.round(S * 0.042)}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const yLine = box.y + box.h + S * 0.06;
+    arrow(ctx, box.x, yLine, box.x + box.w, yLine);
+    ctx.fillText(`${lengthCm} cm`, box.x + box.w / 2, yLine + S * 0.05);
+    const xLine = box.x + box.w + S * 0.05;
+    arrow(ctx, xLine, box.y, xLine, box.y + box.h);
+    ctx.save();
+    ctx.translate(xLine + S * 0.05, box.y + box.h / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(`${widthCm} cm`, 0, 0);
+    ctx.restore();
+    return toJpeg(c, name);
+  }
+
+  const pageNumber = (sel) => {
+    const v = Number(document.querySelector(sel)?.value);
+    return Number.isFinite(v) && v > 0 ? v : "";
+  };
+
+  async function aiExtras(source, presets) {
+    if (!presets.length) return {};
+    setStatus("AI photo ban rahi hai (1-2 minute)...");
+    try {
+      const mime = /^image\/(jpeg|png|webp)$/.test(source.type) ? source.type : "image/jpeg";
+      const { session, images } = await withKeepAlive(bg({ type: "aiVariants", b64: await fileToB64(source), mime, presets }));
+      const out = {};
+      for (const img of images) {
+        const preset = presets.find((p) => img.name.startsWith(`ai_${p}_`));
+        if (!preset || out[preset]) continue;
+        const { b64 } = await bg({ type: "localImage", session, name: img.name });
+        out[preset] = b64ToFile(b64, img.name, "image/jpeg");
+      }
+      return out;
+    } catch (err) {
+      addLog(`AI photo nahi bani: ${err.message}`);
+      return {};
+    }
+  }
+
+  let extras = [];
+  let extraUrls = [];
+
+  function renderExtras() {
+    extraUrls.forEach((u) => URL.revokeObjectURL(u));
+    extraUrls = [];
+    extrasBox.replaceChildren();
+    extrasWrap.classList.toggle("hidden", !extras.length);
+    for (const item of extras) {
+      const url = URL.createObjectURL(item.file);
+      extraUrls.push(url);
+      const img = Object.assign(el("img"), { src: url, alt: item.label, title: item.label });
+      img.addEventListener("click", () => zoom(url));
+      const use = Object.assign(checkbox(), { checked: item.use });
+      use.addEventListener("change", () => { item.use = use.checked; });
+      const save = el("button", "Download", "ghost");
+      save.addEventListener("click", () => downloadFile(item.file, item.file.name));
+      const card = el("div", null, "choice");
+      card.append(img, el("div", item.label, "muted"), item.ai ? el("div", "AI ⚠ product check karo", "err") : el("div", "Asli photo se", "muted"),
+        labelled(use, "Lagao"), save);
+      extrasBox.append(card);
+    }
+  }
+
+  async function buildExtras() {
+    const real = [...otherFiles.files].slice(0, MAX_OTHER_PHOTOS);
+    const source = real[0] || heroFile.files[0] || await pageHeroFile();
+    if (!source) throw new Error("'2.' ke neeche apne product ki asli photo chuno (jaise table par rakhe towel ki photo).");
+    if (/buy|get|free|offer/i.test(source.name)) addLog("Dhyan do: is photo me offer/banner ho sakta hai. Bina text wali asli photo do to close-up aur size chart saaf bananege.");
+    const bitmaps = await Promise.all(real.map((f) => createImageBitmap(f)));
+    const main = bitmaps[0] || await createImageBitmap(source);
+    const needAI = [];
+    if (!bitmaps[1] && cfg.useAI) needAI.push("angle-34");
+    if (cfg.fourth === "daily" && cfg.useAI) needAI.push("lifestyle");
+    const ai = await aiExtras(source, needAI);
+    setStatus("Photos bana rahe hain...");
+    extras = [];
+    if (bitmaps[1]) extras.push({ label: "2. Doosra angle (aapki photo 2)", file: await cleanSquare(bitmaps[1], "photo2_angle.jpg"), use: true });
+    else if (ai["angle-34"]) extras.push({ label: "2. Doosra angle (AI)", file: ai["angle-34"], use: false, ai: true });
+    else addLog("Doosre angle ke liye product ki ek aur photo (side/peeche se) bhi chuno, ya 'AI se alag photos' tick karo.");
+    extras.push({ label: "3. Close-up: asli texture", file: await closeUp(main, "photo3_closeup.jpg"), use: true });
+    if (cfg.fourth === "daily" && ai.lifestyle) extras.push({ label: "4. Daily use (AI)", file: ai.lifestyle, use: false, ai: true });
+    else {
+      if (cfg.fourth === "daily") addLog("Daily use photo AI se nahi bani (local tool + 'AI se alag photos' chahiye), size chart bana diya.");
+      const cm = (v) => (Number(v) > 0 ? Math.min(1000, Math.round(Number(v) * 10) / 10) : 0);
+      const L = cm(sizeL.value);
+      const W = cm(sizeW.value);
+      if (L && W) extras.push({ label: "4. Size chart", file: await sizeChart(bitmaps[2] || main, L, W, "photo4_size.jpg"), use: true });
+      else addLog("Size chart ke liye lambaai aur chaudaai (cm) bharo.");
+    }
+    bitmaps.forEach((b) => b.close());
+    if (!bitmaps.length) main.close();
+    renderExtras();
+    setStatus("Neeche photos dekho. Jo chahiye un par 'Lagao' tick rakho, phir 'Chuni hui photos Meesho par lagao' dabao. AI wali photo khud check karke hi tick karna.");
+  }
+
   async function addOtherPhotos() {
+    if (cfg.extrasMode === "make") return buildExtras();
     const files = [...otherFiles.files].slice(0, MAX_OTHER_PHOTOS);
     if (!files.length) throw new Error("Pehle '2. Baaki photos' ke neeche photos chuno.");
     const prepared = [];
@@ -937,6 +1306,17 @@
       } else prepared.push(f);
     }
     if (cfg.sameFrame && !winner?.spec) addLog("Hero ka frame abhi nahi hai, photos waise hi lag rahi hain.");
+    return uploadExtras(prepared);
+  }
+
+  async function uploadChosenExtras() {
+    const chosen = extras.filter((e) => e.use).map((e) => e.file);
+    if (!chosen.length) throw new Error("Koi photo tick nahi hai.");
+    if (extras.some((e) => e.use && e.ai) && !window.confirm("Tick ki hui photos me AI wali photo bhi hai. Product sahi dikh raha hai na? Lagayein?")) return;
+    await uploadExtras(chosen);
+  }
+
+  async function uploadExtras(prepared) {
     progress.max = prepared.length;
     progress.value = 0;
     const first = otherInputs()[0];
@@ -1007,11 +1387,21 @@
 
   // ---------- events ----------
   btnHero.addEventListener("click", () => guarded(optimizeHero));
+  btnPreview.addEventListener("click", () => guarded(previewLooks));
+  lookSelect.addEventListener("change", () => { previewSeed = null; });
   btnOthers.addEventListener("click", () => {
     if (!otherFiles.files.length) { otherFiles.click(); return; }
     guarded(addOtherPhotos);
   });
   otherFiles.addEventListener("change", () => { if (otherFiles.files.length) guarded(addOtherPhotos); });
+  btnUploadExtras.addEventListener("click", () => guarded(uploadChosenExtras));
+  // Prefill the size chart from the product dimensions already typed in the Meesho form.
+  const prefillSize = () => {
+    if (!sizeL.value) sizeL.value = pageNumber("#product_length");
+    if (!sizeW.value) sizeW.value = pageNumber("#product_breadth");
+  };
+  btnOthers.addEventListener("pointerdown", prefillSize);
+  setTimeout(prefillSize, 2000);
   btnStop.addEventListener("click", () => {
     stopRequested = true;
     btnStop.disabled = true;
@@ -1071,7 +1461,7 @@
     refreshDetect();
     setStatus("Auto-detect par wapas.");
   });
-  [triesInput, targetInput, stickersBox, sameFrameBox, aiBox, refreshPriceBox, waitInput, stepWaitInput, methodSelect]
+  [triesInput, targetInput, stickersBox, lookSelect, extrasModeSelect, fourthSelect, sameFrameBox, aiBox, refreshPriceBox, waitInput, stepWaitInput, methodSelect]
     .forEach((n) => n.addEventListener("change", saveCfg));
 
   chrome.storage.local.get("shipOptimizerCfg").then(({ shipOptimizerCfg }) => {
@@ -1080,6 +1470,9 @@
     triesInput.value = cfg.tries;
     targetInput.value = cfg.target;
     stickersBox.checked = cfg.stickers;
+    lookSelect.value = cfg.look === "variety" ? "variety" : "nice";
+    extrasModeSelect.value = cfg.extrasMode === "asis" ? "asis" : "make";
+    fourthSelect.value = cfg.fourth === "daily" ? "daily" : "size";
     sameFrameBox.checked = cfg.sameFrame;
     aiBox.checked = cfg.useAI;
     refreshPriceBox.checked = cfg.refreshPrice;

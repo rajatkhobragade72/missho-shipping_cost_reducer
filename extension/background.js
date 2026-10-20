@@ -36,8 +36,13 @@ async function aiVariants(msg) {
   const { session } = await (await local("/api/hero", { method: "POST", body: upload })).json();
   const form = new FormData();
   form.append("session", session);
-  const max = Number.isInteger(msg.max) && msg.max > 0 ? msg.max : config.ai_presets.length;
-  config.ai_presets.slice(0, max).forEach((p) => form.append("presets", p.key));
+  const known = new Set(config.ai_presets.map((p) => p.key));
+  const wanted = Array.isArray(msg.presets)
+    ? msg.presets.filter((k) => typeof k === "string" && known.has(k))
+    : config.ai_presets.filter((p) => p.hero !== false).map((p) => p.key);
+  const max = Number.isInteger(msg.max) && msg.max > 0 ? msg.max : wanted.length;
+  if (!wanted.length) throw new Error("Koi AI preset nahi mila");
+  wanted.slice(0, max).forEach((k) => form.append("presets", k));
   const result = await (await local("/api/ai-variants", { method: "POST", body: form })).json();
   return {
     session,

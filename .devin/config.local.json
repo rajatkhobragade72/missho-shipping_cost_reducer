@@ -20,7 +20,8 @@
       "Exec(Out-Null)",
       "Exec(Test-Path)",
       "Exec(\"$env:TEMP\\shipharness\")",
-      "Exec($out.Substring)"
+      "Exec($out.Substring)",
+      "Exec(Select-Object)"
     ]
   }
 }

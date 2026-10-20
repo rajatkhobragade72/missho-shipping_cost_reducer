@@ -15,10 +15,14 @@ DEFAULT_MODEL = "black-forest-labs/flux.2-klein-4b"
 TIMEOUT_SECONDS = 180
 
 _KEEP = (
-    "Keep the product exactly the same: same shape, colours, print, quantity and branding. "
-    "No text, no badges, no watermark, no hands, no extra objects. Square 1:1 image."
+    "Use the exact same product from the photo: identical fabric texture and weave, stitching, colours, "
+    "print, size, proportions and quantity. Do not redraw, restyle, resize or simplify the product. "
+    "Remove every piece of text, offer banner, sticker, badge, logo and watermark that is in the input "
+    "(for example 'Buy 1 Get 1 Free'); the output must contain no text or letters at all."
 )
+_STUDIO = "No hands, no extra objects. Square 1:1 image."
 CLEAN_PRESET = "clean-white"
+LIFESTYLE_PRESET = "lifestyle"
 MAX_PARALLEL = 6
 _WHITE = "on a plain pure white background, centered"
 PRESETS: dict[str, tuple[str, str]] = {
@@ -34,8 +38,15 @@ PRESETS: dict[str, tuple[str, str]] = {
     "light-grey": ("Light grey studio", "Place this product on a plain light grey studio background, centered, soft light."),
     "pastel": ("Soft pastel background", "Place this product on a plain soft pastel background, centered, gentle studio light."),
     "podium": ("Small white podium", "Place this product on a small plain white podium against a plain white background, centered."),
+    LIFESTYLE_PRESET: ("Daily use (lifestyle)", "Show this product in real everyday use in a clean, bright Indian home, for example a hand using it "
+                       "to wipe a kitchen counter or table. Natural light, realistic photo, product clearly visible. Square 1:1 image."),
 }
-PRESETS = {key: (label, f"{prompt} {_KEEP}") for key, (label, prompt) in PRESETS.items()}
+# Lifestyle shots may show hands/props and are never used as the hero (cover) photo.
+NON_HERO_PRESETS = frozenset({LIFESTYLE_PRESET})
+PRESETS = {
+    key: (label, f"{prompt} {_KEEP}" + ("" if key in NON_HERO_PRESETS else f" {_STUDIO}"))
+    for key, (label, prompt) in PRESETS.items()
+}
 
 
 class AIUnavailableError(RuntimeError):

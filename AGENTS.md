@@ -72,6 +72,12 @@ Real run: the charge does change per image (₹267–₹4998 for the same produc
 loop the top 3 cheaper images are re-uploaded and the cheapest confirmed reading wins.
 After a run, `renderChoices` shows up to 6 cheapest images (thumbnail, ₹, confirm mark, click =
 zoom) with "Ye lagao" (re-uploads that image and reads the charge) and "Download" per card.
+Looks (`cfg.look`): "nice" (default; user wants the hero to look attractive) = square 1100 px,
+8 styles (pastel-card, thin-frame, gradient-card, corner-accents, accent-card, double-line,
+dots-card, band) x 9 soft palettes, rounded white card + soft shadow, optional pill badge
+(stickers default off, QC risk); "variety" = the old loud borders/patterns. "Pehle look dekho"
+renders 6 previews without uploading and fixes the seed so the run tries the same looks.
+Harness `?preview=1` renders only the preview (screenshot to judge looks).
 Setup has "Page report copy karo" (inputs, ₹ texts, dialogs, log) for remote debugging.
 Background worker only fetches the front image from `https://*.meesho.com` (CORS) and toggles the panel.
 Selectors auto-detect; Setup has pickers (hero box, other box, shipping ₹, post-upload click steps)

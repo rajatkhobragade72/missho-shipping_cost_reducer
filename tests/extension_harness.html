@@ -26,6 +26,8 @@
     <div class="MuiBox-root"><div><p>Meesho Price</p><p>*</p></div><div class="MuiFormControl-root"><div><input id="price" name="meesho_price" type="text" value="101"></div></div></div>
     <div class="MuiBox-root"><div><p>Net Weight (gms)</p><p>*</p></div><div class="MuiFormControl-root"><div><input id="weight" type="text" value="300"></div></div></div>
     <div class="MuiBox-root"><div><p>Product Name</p></div><div><input id="pname" type="text" value="Microfiber Cloth"></div></div>
+    <div class="MuiBox-root"><div><p>Product Length</p></div><div><input id="product_length" type="text" value="40"></div></div>
+    <div class="MuiBox-root"><div><p>Product Breadth</p></div><div><input id="product_breadth" type="text" value="30"></div></div>
   </div>
   <div class="breakdown">
     <h4>Bank Settlement Breakdown</h4>
@@ -41,7 +43,7 @@
       x.fillStyle = color; x.fillRect(w * 0.2, h * 0.2, w * 0.6, h * 0.6);
       return new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
     }
-    makeImage("#c2185b", 600, 600).then((b) => { document.getElementById("front-img").src = URL.createObjectURL(b); });
+    makeImage("#c2185b", 600, 800).then((b) => { document.getElementById("front-img").src = URL.createObjectURL(b); });
 
     document.getElementById("getFile").addEventListener("change", () => { window.__touchedGetFile = true; });
     document.getElementById("change").addEventListener("click", () => document.getElementById("changeFrontImage").click());
@@ -72,6 +74,9 @@
       }
     });
 
+    // Headless has nobody to answer "AI photo lagayein?" dialogs: count them and say yes.
+    window.__confirms = 0;
+    window.confirm = () => { window.__confirms++; return true; };
     const attach = Element.prototype.attachShadow;
     Element.prototype.attachShadow = function (opts) { return attach.call(this, { ...opts, mode: "open" }); };
     window.chrome = {
@@ -105,6 +110,19 @@
     }, 1000);
     (async () => {
       await new Promise((r) => setTimeout(r, 2000));
+      if (new URLSearchParams(location.search).has("preview")) {
+        // ?preview=1: only render the look preview (take a screenshot to judge the styles).
+        clearInterval(progressTimer);
+        button("Pehle look").click();
+        await waitFor(/pehli 6 photos|nahi mili/);
+        document.title = `DONE preview cards=${panel().querySelectorAll(".choice").length}`;
+        const sheet = document.createElement("div");
+        sheet.id = "sheet";
+        sheet.style.cssText = "position:absolute;left:0;top:0;width:520px;display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#fff";
+        for (const img of panel().querySelectorAll(".choice img")) sheet.append(Object.assign(document.createElement("img"), { src: img.src, style: "width:100%" }));
+        document.body.append(sheet);
+        return;
+      }
       button("1.").click();
       await waitFor(/Laga di|Dobara|NAHI|nahi|Roka/);
       const auto = panel().querySelector(".result").textContent;
@@ -124,11 +142,15 @@
       files.forEach((f) => dt.items.add(f));
       panel().querySelector("input[multiple]").files = dt.files;
       button("2.").click();
-      await waitFor(/Photos laga di|nahi mila|nahi dikha|Pehle/);
+      await waitFor(/Neeche photos dekho|nahi mila|Pehle|asli photo chuno/);
+      const extraLabels = [...panel().querySelectorAll(".choices")].pop().textContent;
+      window.__extras = extraLabels.match(/\d\. [^A]*?(?=Asli|AI)/g)?.join(" / ");
+      button("Chuni hui photos").click();
+      await waitFor(/Photos laga di|nahi dikha|Koi photo/);
       button("Page report").click();
       await new Promise((r) => setTimeout(r, 500));
       clearInterval(progressTimer);
-      document.title = `DONE hero=${hero} [${window.__lastApplied}] | others=${window.__others.join(",")} | getFile touched=${!!window.__touchedGetFile} | ${statusText()}`;
+      document.title = `DONE hero=${hero} [${window.__lastApplied}] | extras=${window.__extras} | confirms=${window.__confirms} | others=${window.__others.join(",")} | getFile touched=${!!window.__touchedGetFile} | ${statusText()}`;
       const pre = document.createElement("pre");
       pre.id = "report";
       pre.textContent = panel().querySelector("textarea").value;
