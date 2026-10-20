@@ -14,7 +14,9 @@
       "Exec(Start-Sleep)",
       "Exec(\"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\")",
       "Exec($out)",
-      "Exec(Out-String)"
+      "Exec(Out-String)",
+      "Exec(Join-Path)",
+      "Exec(git status)"
     ]
   }
 }

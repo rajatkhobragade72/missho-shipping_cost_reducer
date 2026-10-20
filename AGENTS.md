@@ -61,7 +61,12 @@ Real page report (path `/panel/v3/new/cataloging/<id>/catalogs/single/add`, MUI)
 excluded everywhere). Front thumbnails come from `upload.meeshosupplyassets.com` (allowed in
 background fetch). Labels are split `<p>Meesho Price</p><p>*</p>`, so refresh fields are found via
 `fieldLabel` (name/id/placeholder + nearest short ancestor text with a single input) matching
-meesho price / selling price / weight; all of them are re-entered after each upload.
+meesho price / selling price; only `#meesho_price` is re-entered (weight fields such as
+`#product_weight`/`#product_weight_unit` are MUI dropdowns and must not be cleared).
+Shipping text on the real page: "Shipping (added separately) ₹579" in Customer Price Breakdown.
+Real run: the charge does change per image (₹267–₹4998 for the same product) but is noisy / can lag
+(an old response lands first), so `waitForCost` waits >= 8 s and needs 3 s stability, and after the
+loop the top 3 cheaper images are re-uploaded and the cheapest confirmed reading wins.
 Setup has "Page report copy karo" (inputs, ₹ texts, dialogs, log) for remote debugging.
 Background worker only fetches the front image from `https://*.meesho.com` (CORS) and toggles the panel.
 Selectors auto-detect; Setup has pickers (hero box, other box, shipping ₹, post-upload click steps)

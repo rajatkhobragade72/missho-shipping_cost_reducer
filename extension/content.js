@@ -3,7 +3,9 @@
   window.__shipOptimizer = true;
 
   const POLL_MS = 500;
-  const STABLE_MS = 2000;
+  const STABLE_MS = 3000;
+  const MIN_READ_WAIT_MS = 8000;
+  const CONFIRM_TOP = 3;
   const MAX_WAIT_MS = 45000;
   const STEP_TIMEOUT_MS = 15000;
   const UPLOAD_CHECK_MS = 6000;
@@ -587,8 +589,11 @@
     }
   }
 
-  async function waitForCost(prevText) {
+  // Meesho answers asynchronously and an old response can land first, so never take the first change:
+  // wait a minimum time and require the value to stay unchanged for STABLE_MS.
+  async function waitForCost() {
     const start = Date.now();
+    const minWait = Math.max(MIN_READ_WAIT_MS, cfg.waitSec * 1000);
     let last;
     let stableSince = start;
     while (Date.now() - start < MAX_WAIT_MS && !stopRequested) {
@@ -596,10 +601,7 @@
       const costEl = findCostEl();
       const text = costEl ? costEl.textContent.trim() : null;
       if (text !== last) { last = text; stableSince = Date.now(); }
-      const changed = text !== null && text !== prevText;
-      if (text !== null && Date.now() - stableSince >= STABLE_MS && (changed || Date.now() - start >= cfg.waitSec * 1000)) {
-        return parseCost(text);
-      }
+      if (text !== null && Date.now() - start >= minWait && Date.now() - stableSince >= STABLE_MS) return parseCost(text);
     }
     return null;
   }
@@ -623,13 +625,16 @@
     return own;
   }
 
-  const REFRESH_FIELD_RE = /meesho.?price|selling.?price|\bweight\b/i;
+  // Only the price text box: weight fields on Meesho are dropdowns and must not be cleared.
+  const REFRESH_FIELD_RE = /meesho.?price|selling.?price/i;
+  const MEESHO_PRICE_INPUT = "#meesho_price";
 
   function refreshInputs() {
-    const picked = safeQuery(cfg.priceSelector);
-    if (picked) return [picked.matches("input") ? picked : picked.querySelector("input")].filter(Boolean);
-    return [...document.querySelectorAll(TEXT_INPUTS)]
-      .filter((i) => !host.contains(i) && visible(i) && !i.disabled && i.value && REFRESH_FIELD_RE.test(fieldLabel(i)));
+    const picked = safeQuery(cfg.priceSelector) || document.querySelector(MEESHO_PRICE_INPUT);
+    if (picked) return [picked.matches("input") ? picked : picked.querySelector("input")].filter((i) => i?.value);
+    const found = [...document.querySelectorAll(TEXT_INPUTS)]
+      .find((i) => !host.contains(i) && visible(i) && !i.disabled && i.value && REFRESH_FIELD_RE.test(fieldLabel(i)));
+    return found ? [found] : [];
   }
 
   const findPriceInput = () => refreshInputs()[0] || null;
@@ -655,8 +660,6 @@
   }
 
   async function tryHero(file) {
-    const prevEl = findCostEl();
-    const prevText = prevEl ? prevEl.textContent.trim() : null;
     const beforeSrc = frontSrc();
     const input = heroInput() || (cfg.uploadMethod === "input" ? await heroInputViaChange() : null);
     if (!input && cfg.uploadMethod === "input") throw new Error("Front image ka upload box nahi mila (CHANGE dabane par bhi). Setup me 'Page report copy karo' dabao aur report bhejo.");
@@ -668,7 +671,7 @@
       else await sleep(POLL_MS);
     }
     if (cfg.refreshPrice) await refreshPrice();
-    const cost = await waitForCost(prevText);
+    const cost = await waitForCost();
     return { cost, uploaded, frontChanged };
   }
 
@@ -761,6 +764,7 @@
     const seed = Math.floor(Math.random() * 1e6);
     const total = aiPhotos.length + cfg.tries;
     let best = { cost: baseline, file: original, spec: null, label: "Original" };
+    const results = [];
     let lastFile = original;
     let readFails = 0;
     let notUploaded = 0;
@@ -792,6 +796,7 @@
       } else {
         addLog(`${label}: ₹${cost}${cost < best.cost ? "  ← naya best" : ""}${savedNote}`);
         if (cost < best.cost) best = { cost, file, spec, label };
+        if (cost < baseline) results.push({ cost, file, spec, label });
         if (cost === baseline) sameAsOriginal++;
       }
       if (i === 4 && sameAsOriginal === 5) { stuck = true; break; }
@@ -802,25 +807,46 @@
     }
     bitmaps.forEach((b) => b.close());
 
+    // Meesho's number for the same image is not always repeatable: re-upload the cheapest few and keep
+    // the one that is cheapest on the second reading too.
+    const wasStopped = stopRequested;
+    stopRequested = false;
+    const candidates = results.sort((a, b) => a.cost - b.cost).slice(0, wasStopped ? 1 : CONFIRM_TOP);
+    let confirmed = null;
+    for (const [n, c] of candidates.entries()) {
+      setStatus(`Confirm kar rahe hain ${n + 1}/${candidates.length}: ${c.label} (pehle ₹${c.cost})...`);
+      const { cost } = await tryHero(c.file);
+      lastFile = c.file;
+      addLog(`Confirm: ${c.label}: pehle ₹${c.cost}, ab ₹${cost ?? "?"}`);
+      if (cost !== null && cost < baseline && (!confirmed || cost < confirmed.cost)) confirmed = { ...c, cost };
+    }
+    best = confirmed || { cost: baseline, file: original, spec: null, label: "Original" };
     const improved = best.file !== original;
     if (best.file !== lastFile) {
-      setStatus(improved ? "Sabse sasti image wapas laga rahe hain..." : "Koi variation sasti nahi mili, original wapas laga rahe hain...");
-      const confirm = (await tryHero(best.file)).cost;
-      if (confirm !== null && confirm !== best.cost) addLog(`Dhyan do: wapas lagane par ₹${confirm} dikha (pehle ₹${best.cost}).`);
+      setStatus(improved ? "Sabse sasti (confirm ki hui) image laga rahe hain..." : "Koi variation pakki sasti nahi nikli, original wapas laga rahe hain...");
+      const final = (await tryHero(best.file)).cost;
+      if (final !== null && final !== best.cost) {
+        addLog(`Dhyan do: aakhri baar lagane par ₹${final} dikha (confirm me ₹${best.cost}).`);
+        if (improved) best = { ...best, cost: final };
+      }
     }
     winner = improved ? best : null;
     if (improved) {
-      showResult(`Pehle ₹${baseline} → Ab ₹${best.cost}  (₹${baseline - best.cost} bacha)`);
+      const saved = baseline - best.cost;
+      showResult(saved > 0
+        ? `Pehle ₹${baseline} → Ab ₹${best.cost}  (₹${saved} bacha, confirm kiya)`
+        : `Laga di ${best.label}, par aakhri reading ₹${best.cost} aayi (original ₹${baseline}).`);
       btnDownload.classList.remove("hidden");
-      setStatus(`Laga di: ${best.label}. Ab form check karke khud Submit karo.`);
+      setStatus(saved > 0
+        ? `Laga di: ${best.label}. Ab form check karke khud Submit karo.`
+        : "Meesho ka shipping number har baar alag aa raha hai. Dobara chalao ya 'Sasti image download karo' se image rakh lo.", saved <= 0);
     } else {
-      showResult(`Original hi sabse sasta hai: ₹${baseline}`);
       if (stuck) {
         showResult(`5 alag images par bhi shipping ₹${baseline} hi raha, isliye ruk gaye.`);
         setStatus("Lagta hai Meesho shipping dobara calculate nahi kar raha. Setup kholo: 'Price box: mil gaya' dikhna chahiye (nahi to 'Pick price box' karo). Phir bhi same aaye to 'Page report copy karo' dabake report bhejo.", true);
       } else {
         showResult(`Original hi sabse sasta hai: ₹${baseline}`);
-        setStatus(stopRequested ? "Roka gaya. Original wapas laga di." : "Dobara chalao (har baar naye colours try hote hain) ya 'Kitni try' badhao.");
+        setStatus(wasStopped ? "Roka gaya. Original wapas laga di." : "Dobara chalao (har baar naye colours try hote hain) ya 'Kitni try' badhao.");
       }
     }
   }
