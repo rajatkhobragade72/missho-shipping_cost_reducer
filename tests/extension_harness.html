@@ -107,7 +107,17 @@
       await new Promise((r) => setTimeout(r, 2000));
       button("1.").click();
       await waitFor(/Laga di|Dobara|NAHI|nahi|Roka/);
-      const hero = panel().querySelector(".result").textContent;
+      const auto = panel().querySelector(".result").textContent;
+      const cards = [...panel().querySelectorAll(".choice")];
+      let picked = "no choices";
+      if (cards.length > 1) {
+        const want = cards[1].querySelector("img").title;
+        [...cards[1].querySelectorAll("button")].find((b) => b.textContent === "Ye lagao").click();
+        await new Promise((r) => setTimeout(r, 1000));
+        await waitFor(/Laga di/);
+        picked = `cards=${cards.length} picked="${want}" applied=${window.__lastApplied} on=${panel().querySelectorAll(".choice.on").length}`;
+      }
+      const hero = `${auto} || ${picked}`;
       const files = await Promise.all(["#1976d2", "#388e3c"].map((c, i) => makeImage(c, 500, 500)
         .then((b) => new File([b], `extra${i}.jpg`, { type: "image/jpeg" }))));
       const dt = new DataTransfer();

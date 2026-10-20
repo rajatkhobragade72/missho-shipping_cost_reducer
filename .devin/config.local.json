@@ -16,7 +16,10 @@
       "Exec($out)",
       "Exec(Out-String)",
       "Exec(Join-Path)",
-      "Exec(git status)"
+      "Exec(git status)",
+      "Exec(Out-Null)",
+      "Exec(Test-Path)",
+      "Exec(\"$env:TEMP\\shipharness\")"
     ]
   }
 }

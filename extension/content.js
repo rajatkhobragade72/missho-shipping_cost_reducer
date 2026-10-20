@@ -6,6 +6,7 @@
   const STABLE_MS = 3000;
   const MIN_READ_WAIT_MS = 8000;
   const CONFIRM_TOP = 3;
+  const MAX_CHOICES = 6;
   const MAX_WAIT_MS = 45000;
   const STEP_TIMEOUT_MS = 15000;
   const UPLOAD_CHECK_MS = 6000;
@@ -367,9 +368,18 @@
     button.stop{background:#b00020}
     button:disabled{opacity:.5;cursor:not-allowed}
     .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+    label.row{flex-wrap:nowrap;align-items:flex-start}
     .muted{color:#666;font-size:12px}
     .err{color:#b00020;font-weight:600}
     .result{background:#e8f5e9;border:1px solid #1b8a3a;border-radius:8px;padding:8px;color:#1b5e20;font-weight:700;font-size:14px}
+    .choices{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+    .choice{border:2px solid #eee;border-radius:8px;padding:4px;display:grid;gap:3px;text-align:center;font-size:11px;background:#fff}
+    .choice.on{border-color:#1b8a3a;background:#e8f5e9}
+    .choice img{width:100%;aspect-ratio:1;object-fit:contain;background:#fafafa;border-radius:4px;cursor:zoom-in}
+    .choice .cost{font-size:14px;font-weight:700;color:#1b5e20}
+    .choice button{padding:4px 2px;font-size:11px}
+    .zoom{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;cursor:zoom-out}
+    .zoom img{max-width:90vw;max-height:90vh;background:#fff}
     progress{width:100%}
     input[type=number]{width:52px}
     input[type=file]{font-size:11px;max-width:100%}
@@ -414,6 +424,9 @@
   const progress = Object.assign(el("progress"), { max: 1, value: 0 });
   const status = el("div", "");
   const result = el("div", "", "result hidden");
+  const choicesTitle = el("div", "Sabse sasti photos: jo pasand ho uspar 'Ye lagao' dabao (photo par click = badi dikhegi)", "muted hidden");
+  const choices = el("div", null, "choices hidden");
+  let choiceUrls = [];
   const btnDownload = el("button", "Sasti image download karo", "ghost hidden");
   const log = el("ol");
 
@@ -456,7 +469,7 @@
       labelled(stickersBox, "Stickers / badges bhi try karo"),
       labelled(aiBox, "AI se alag photos bhi banao (local tool chalu hona chahiye)")),
     card(btnOthers, otherFiles, labelled(sameFrameBox, "Hero jaisa frame lagao")),
-    row(btnStop, btnDownload), progress, status, result, log, setup,
+    row(btnStop, btnDownload), progress, status, result, choicesTitle, choices, log, setup,
   );
   box.append(head, body);
   root.append(style, box);
@@ -734,9 +747,61 @@
     result.classList.remove("hidden");
   }
 
+  function downloadFile(file, name) {
+    const a = el("a");
+    a.href = URL.createObjectURL(file);
+    a.download = name;
+    root.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
+  function zoom(src) {
+    const overlay = el("div", null, "zoom");
+    overlay.append(Object.assign(el("img"), { src }));
+    overlay.addEventListener("click", () => overlay.remove());
+    root.append(overlay);
+  }
+
+  // Gallery of the cheapest images so the user can choose which one goes on the listing.
+  function renderChoices(list, appliedFile, baseline) {
+    choiceUrls.forEach((u) => URL.revokeObjectURL(u));
+    choiceUrls = [];
+    choices.replaceChildren();
+    choices.classList.toggle("hidden", !list.length);
+    choicesTitle.classList.toggle("hidden", !list.length);
+    for (const item of list) {
+      const url = URL.createObjectURL(item.file);
+      choiceUrls.push(url);
+      const shownCost = item.confirmed ?? item.cost;
+      const card = el("div", null, `choice${item.file === appliedFile ? " on" : ""}`);
+      const img = Object.assign(el("img"), { src: url, alt: item.label, title: item.label });
+      img.addEventListener("click", () => zoom(url));
+      const apply = el("button", item.file === appliedFile ? "Laga hua hai" : "Ye lagao");
+      const save = el("button", "Download", "ghost");
+      apply.addEventListener("click", () => guarded(async () => {
+        setStatus(`${item.label} laga rahe hain...`);
+        const { cost } = await tryHero(item.file);
+        if (cost !== null) item.confirmed = cost;
+        winner = { ...item, cost: cost ?? shownCost };
+        btnDownload.classList.remove("hidden");
+        showResult(`Laga di: ₹${winner.cost}${baseline ? `  (original ₹${baseline})` : ""}`);
+        setStatus(`Laga di: ${item.label}. Ab form check karke khud Submit karo.`);
+        renderChoices(list, item.file, baseline);
+      }));
+      save.addEventListener("click", () => downloadFile(item.file, `meesho_hero_rs${shownCost}.jpg`));
+      card.append(img, el("div", `₹${shownCost}`, "cost"),
+        el("div", item.confirmed !== undefined && item.confirmed !== item.cost ? `(pehli baar ₹${item.cost})` : item.confirmed !== undefined ? "confirm ✓" : " ", "muted"),
+        apply, save);
+      choices.append(card);
+    }
+  }
+
   // ---------- flow 1: optimize hero ----------
   async function optimizeHero() {
     result.classList.add("hidden");
+    renderChoices([], null);
     btnDownload.classList.add("hidden");
     log.replaceChildren();
     if (!heroInput() && !changeLink(frontTile()) && cfg.uploadMethod === "input") throw new Error("Front image nahi mili. Meesho ka catalog page kholo (jahan 'Front Image' dikhe), ya Setup me 'Pick hero upload box' karo.");
@@ -818,6 +883,7 @@
       const { cost } = await tryHero(c.file);
       lastFile = c.file;
       addLog(`Confirm: ${c.label}: pehle ₹${c.cost}, ab ₹${cost ?? "?"}`);
+      if (cost !== null) c.confirmed = cost;
       if (cost !== null && cost < baseline && (!confirmed || cost < confirmed.cost)) confirmed = { ...c, cost };
     }
     best = confirmed || { cost: baseline, file: original, spec: null, label: "Original" };
@@ -831,6 +897,8 @@
       }
     }
     winner = improved ? best : null;
+    const shown = results.slice().sort((a, b) => (a.confirmed ?? a.cost) - (b.confirmed ?? b.cost)).slice(0, MAX_CHOICES);
+    renderChoices(shown, improved ? best.file : null, baseline);
     if (improved) {
       const saved = baseline - best.cost;
       showResult(saved > 0
@@ -946,14 +1014,7 @@
     setStatus("Rok rahe hain... (chalu wali image ka kaam khatam hote hi rukega)");
   });
   btnDownload.addEventListener("click", () => {
-    if (!winner) return;
-    const a = el("a");
-    a.href = URL.createObjectURL(winner.file);
-    a.download = `meesho_hero_rs${winner.cost}.jpg`;
-    root.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    if (winner) downloadFile(winner.file, `meesho_hero_rs${winner.cost}.jpg`);
   });
   btnPickHero.addEventListener("click", () => pick("Page par FRONT image upload box par click karo", (t) => {
     cfg.heroSelector = cssPath(t);

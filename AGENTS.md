@@ -67,6 +67,8 @@ Shipping text on the real page: "Shipping (added separately) ₹579" in Customer
 Real run: the charge does change per image (₹267–₹4998 for the same product) but is noisy / can lag
 (an old response lands first), so `waitForCost` waits >= 8 s and needs 3 s stability, and after the
 loop the top 3 cheaper images are re-uploaded and the cheapest confirmed reading wins.
+After a run, `renderChoices` shows up to 6 cheapest images (thumbnail, ₹, confirm mark, click =
+zoom) with "Ye lagao" (re-uploads that image and reads the charge) and "Download" per card.
 Setup has "Page report copy karo" (inputs, ₹ texts, dialogs, log) for remote debugging.
 Background worker only fetches the front image from `https://*.meesho.com` (CORS) and toggles the panel.
 Selectors auto-detect; Setup has pickers (hero box, other box, shipping ₹, post-upload click steps)
