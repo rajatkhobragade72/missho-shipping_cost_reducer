@@ -54,7 +54,8 @@ function toBase64(bytes) {
 function allowedImageUrl(raw) {
   try {
     const url = new URL(raw);
-    return url.protocol === "https:" && (url.hostname === "meesho.com" || url.hostname.endsWith(".meesho.com"));
+    return url.protocol === "https:" && ["meesho.com", "meeshosupplyassets.com"]
+      .some((d) => url.hostname === d || url.hostname.endsWith(`.${d}`));
   } catch {
     return false;
   }

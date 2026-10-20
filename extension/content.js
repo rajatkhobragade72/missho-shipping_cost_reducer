@@ -66,8 +66,14 @@
     return text.slice(0, 30) || node.tagName.toLowerCase();
   }
 
+  // Real Meesho single-catalog page ids (from a user page report). #getFile is "Add Product": never touch it.
+  const MEESHO_HERO_INPUT = "#changeFrontImage";
+  const MEESHO_OTHER_INPUT = "#addMoreImagesInput";
+  const MEESHO_FORBIDDEN_INPUT = "#getFile";
+
   function imageInputs() {
-    return [...document.querySelectorAll("input[type=file]")].filter((i) => !i.accept || /image|jpe?g|png|webp/i.test(i.accept));
+    return [...document.querySelectorAll("input[type=file]")].filter((i) =>
+      !i.matches(MEESHO_FORBIDDEN_INPUT) && (!i.accept || /image|jpe?g|png|webp/i.test(i.accept)));
   }
 
   function inputFromPicked(selector) {
@@ -104,6 +110,8 @@
   function heroInput() {
     const picked = inputFromPicked(cfg.heroSelector);
     if (picked) return picked;
+    const known = document.querySelector(MEESHO_HERO_INPUT);
+    if (known) return known;
     const tile = frontTile();
     if (tile) return tile.querySelector("input[type=file]") || null;
     return imageInputs().find((i) => !i.multiple) || imageInputs()[0] || null;
@@ -135,6 +143,8 @@
   function otherInputs() {
     const picked = inputFromPicked(cfg.otherSelector);
     if (picked) return [picked];
+    const known = document.querySelector(MEESHO_OTHER_INPUT);
+    if (known) return [known];
     const hero = heroInput();
     const tile = frontTile();
     return imageInputs().filter((i) => i !== hero && !tile?.contains(i));
@@ -599,35 +609,49 @@
     return img ? img.currentSrc || img.src : null;
   };
 
-  function findPriceInput() {
-    const picked = safeQuery(cfg.priceSelector);
-    if (picked) return picked.matches("input") ? picked : picked.querySelector("input");
-    const labels = [...document.querySelectorAll("label, p, span, div")].filter((n) =>
-      !host.contains(n) && n.children.length <= 2 && /^(meesho price|selling price|price)\s*\*?$/i.test(ownText(n)) && visible(n));
-    for (const label of labels) {
-      for (let n = label.parentElement, depth = 0; n && n !== document.body && depth < 3; n = n.parentElement, depth++) {
-        const input = n.querySelector("input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=hidden])");
-        if (input) return input;
-      }
+  const TEXT_INPUTS = "input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=search])";
+
+  // Short label text near an input (MUI puts "Meesho Price" + "*" in sibling <p>s a few levels up).
+  function fieldLabel(input) {
+    const own = [input.name, input.id, input.placeholder, input.getAttribute("aria-label")].filter(Boolean).join(" ");
+    for (let n = input.parentElement, depth = 0; n && n !== document.body && depth < 5; n = n.parentElement, depth++) {
+      const text = ownText(n);
+      if (text && text.length <= 80 && n.querySelectorAll(TEXT_INPUTS).length === 1) {
+        if (/[a-z]/i.test(text)) return `${own} ${text}`.trim();
+      } else if (n.querySelectorAll(TEXT_INPUTS).length > 1) break;
     }
-    return null;
+    return own;
   }
 
-  // Meesho may only recalculate the breakdown when the price field changes: re-enter the same price.
+  const REFRESH_FIELD_RE = /meesho.?price|selling.?price|\bweight\b/i;
+
+  function refreshInputs() {
+    const picked = safeQuery(cfg.priceSelector);
+    if (picked) return [picked.matches("input") ? picked : picked.querySelector("input")].filter(Boolean);
+    return [...document.querySelectorAll(TEXT_INPUTS)]
+      .filter((i) => !host.contains(i) && visible(i) && !i.disabled && i.value && REFRESH_FIELD_RE.test(fieldLabel(i)));
+  }
+
+  const findPriceInput = () => refreshInputs()[0] || null;
+
+  // Meesho may only recalculate the breakdown when price/weight change: re-enter the same values.
   async function refreshPrice() {
-    const input = findPriceInput();
-    if (!input?.value) return false;
+    const inputs = refreshInputs();
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    const value = input.value;
-    input.focus();
-    for (const v of ["", value]) {
-      setValue.call(input, v);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
+    for (const input of inputs) {
+      const value = input.value;
+      input.focus();
+      for (const v of ["", value]) {
+        setValue.call(input, v);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        await sleep(300);
+      }
+      input.blur();
+      input.dispatchEvent(new Event("focusout", { bubbles: true }));
       await sleep(300);
     }
-    input.blur();
-    return true;
+    return inputs.length > 0;
   }
 
   async function tryHero(file) {
@@ -726,6 +750,10 @@
     }
     if (baseline === null) throw new Error("Shipping ₹ nahi dikh raha. Pehle category/weight/price bharo, ya Setup me 'Pick shipping ₹' karo.");
     addLog(`Original: ₹${baseline}`);
+    if (cfg.refreshPrice) {
+      const fields = refreshInputs().map((i) => fieldLabel(i).slice(0, 25));
+      addLog(fields.length ? `Har upload ke baad ye dobara bharenge: ${fields.join(", ")}` : "Price/weight box nahi mila (Setup me 'Pick price box' karo)");
+    }
 
     const aiPhotos = cfg.useAI ? await aiSources(original) : [];
     const bitmaps = [await createImageBitmap(original)];
@@ -846,6 +874,13 @@
       `changeLink: ${changeLink(tile) ? cssPath(changeLink(tile)) : "none"}`,
       `heroInput: ${heroInput() ? cssPath(heroInput()) : "none"}`,
       `cost: ${readCost()} via ${findCostEl() ? cssPath(findCostEl()) : "none"}`,
+      `costText: "${short(findCostEl()?.textContent, 200)}"`,
+      `costParentText: "${short(findCostEl()?.parentElement?.textContent, 300)}"`,
+      `breakdown: "${short([...document.querySelectorAll("body *")].find((n) => !host.contains(n) && n.children.length === 0 && /bank settlement/i.test(n.textContent))?.parentElement?.parentElement?.textContent, 600)}"`,
+      `refreshInputs: ${refreshInputs().map((i) => `${cssPath(i)} [${short(fieldLabel(i), 40)}]`).join(" ; ") || "none"}`,
+      "textInputs:",
+      ...[...document.querySelectorAll(TEXT_INPUTS)].filter((i) => !host.contains(i) && visible(i)).slice(0, 30)
+        .map((i) => ` - ${i.id ? `#${i.id}` : i.name || "?"} label="${short(fieldLabel(i), 50)}" value="${short(i.value, 15)}"`),
       "fileInputs:",
       ...[...document.querySelectorAll("input[type=file]")].map((i) =>
         ` - ${cssPath(i)} accept=${i.accept} multiple=${i.multiple} near="${short(i.parentElement?.parentElement?.textContent, 50)}"`),
@@ -873,7 +908,11 @@
 
   // ---------- events ----------
   btnHero.addEventListener("click", () => guarded(optimizeHero));
-  btnOthers.addEventListener("click", () => guarded(addOtherPhotos));
+  btnOthers.addEventListener("click", () => {
+    if (!otherFiles.files.length) { otherFiles.click(); return; }
+    guarded(addOtherPhotos);
+  });
+  otherFiles.addEventListener("change", () => { if (otherFiles.files.length) guarded(addOtherPhotos); });
   btnStop.addEventListener("click", () => {
     stopRequested = true;
     btnStop.disabled = true;

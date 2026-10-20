@@ -56,6 +56,12 @@ value, via the native value setter + input/change/blur) so the breakdown recalcu
 Optional "AI se alag photos" checkbox: background posts the original to the local tool
 (`/api/hero` + `/api/ai-variants`, key stays server-side; needs host permission 127.0.0.1:8000),
 tests each AI photo raw first, then border variants cycle over [original, ...AI photos].
+Real page report (path `/panel/v3/new/cataloging/<id>/catalogs/single/add`, MUI): file inputs
+`#changeFrontImage` (front), `#addMoreImagesInput` (others, multiple), `#getFile` ("Add Product",
+excluded everywhere). Front thumbnails come from `upload.meeshosupplyassets.com` (allowed in
+background fetch). Labels are split `<p>Meesho Price</p><p>*</p>`, so refresh fields are found via
+`fieldLabel` (name/id/placeholder + nearest short ancestor text with a single input) matching
+meesho price / selling price / weight; all of them are re-entered after each upload.
 Setup has "Page report copy karo" (inputs, ₹ texts, dialogs, log) for remote debugging.
 Background worker only fetches the front image from `https://*.meesho.com` (CORS) and toggles the panel.
 Selectors auto-detect; Setup has pickers (hero box, other box, shipping ₹, post-upload click steps)
