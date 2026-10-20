@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meesho Shipping Optimizer</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Meesho Shipping Optimizer</h1>
+    <p>Hero image ke kai versions banao, Meesho par cost check karo, sabse sasti wali use karo, phir baaki photos usi style me banao.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Step 1: Hero image upload karo</h2>
+      <form id="hero-form">
+        <input type="file" id="hero-file" accept="image/jpeg,image/png,image/webp" required>
+        <button type="submit">Variations banao</button>
+      </form>
+      <p class="hint">Tip: sirf ek product ki saaf photo do. "Buy 1 Get 1" jaise banner, text, ya ek se zyada pieces wali photo se Meesho product ko bada/bhaari samajh sakta hai.</p>
+      <p id="hero-status" class="status"></p>
+    </section>
+
+    <section class="panel hidden" id="results-panel">
+      <h2>Step 2: Meesho par cost check karo</h2>
+      <ol class="hint">
+        <li><strong>Automatic:</strong> Chrome extension (folder <code>extension</code>) lagao, Meesho Supplier Panel me catalogue upload page kholo aur "Shipping Tester" panel me "Test all images" dabao. Har image ka asli cost yahan apne aap "(Meesho se)" ke saath aa jayega.</li>
+        <li><strong>Manual:</strong> Variations download karo aur Meesho Supplier Panel par catalogue me upload karke shipping charge dekho (submit mat karna).</li>
+        <li>Jo cost dikhe wo card ke "Meesho cost" box me likho. Sabse sasti image #1 par aa jayegi aur uspar "USE THIS" likha aayega.</li>
+        <li>"Comparison sheet" se ek image milegi jisme har variation par number aur cost likha hoga (sirf aapke dekhne ke liye, Meesho par upload mat karna).</li>
+      </ol>
+      <div class="toolbar">
+        <label class="target">Target shipping (₹):
+          <input type="number" id="target" min="1" max="500" value="40">
+        </label>
+        <button type="button" id="sheet-btn">Comparison sheet download</button>
+      </div>
+      <div class="ai-box">
+        <h3>AI hero images (Pollinations): upload ke baad apne aap 12 style banenge</h3>
+        <div id="ai-setup" class="hint hidden">
+          AI band hai. <code>.env.example</code> ko <code>.env</code> me copy karo, usme <code>POLLINATIONS_API_KEY</code> (enter.pollinations.ai/keys se) daalo aur server restart karo.
+        </div>
+        <div id="ai-controls" class="hidden">
+          <p class="hint">Aapki photo Pollinations ke server par bheji jayegi. AI kabhi-kabhi product badal deta hai, upload se pehle dhyan se check karna. "Clean white studio" wali image se 8 extra framed versions bhi bante hain (alag size/zoom). Har baar dobara chalane par naye results aate hain.</p>
+          <div id="ai-presets" class="presets"></div>
+          <button type="button" id="ai-btn">Aur AI images banao</button>
+        </div>
+        <p id="ai-status" class="status"></p>
+      </div>
+
+      <div id="grid" class="grid"></div>
+    </section>
+
+    <section class="panel hidden" id="extras-panel">
+      <h2>Step 3: Baaki catalogue images</h2>
+      <p>Chuna hua hero: <strong id="chosen-style"></strong></p>
+      <p class="hint">Dusre angles ki photos upload karo (max 10). Sab usi size aur zoom me banengi taaki catalogue ek jaisa dikhe. Plain/white background wali photos sabse achhi aati hain.</p>
+      <form id="extras-form">
+        <input type="file" id="extras-files" accept="image/jpeg,image/png,image/webp" multiple required>
+        <button type="submit">Images banao</button>
+      </form>
+      <p id="extras-status" class="status"></p>
+      <div id="extras-grid" class="grid"></div>
+      <button id="download-all" class="hidden">Hero + saari images ZIP download</button>
+    </section>
+  </main>
+
+  <template id="card-template">
+    <article class="card">
+      <div class="rank"></div>
+      <img alt="variation">
+      <div class="meta">
+        <div class="verdict"></div>
+        <div class="label"></div>
+        <ul class="warnings"></ul>
+        <label>Meesho cost (₹): <input type="number" class="cost" min="0" max="100000" step="1"></label>
+        <div class="actions">
+          <a class="download" download>Download</a>
+          <button type="button" class="choose">Hero chuno</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>

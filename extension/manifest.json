@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Meesho Shipping Tester (local)",
+  "version": "0.1.0",
+  "description": "Uploads images from the local Shipping Optimizer into your Meesho Supplier Panel and reads the shipping charge shown.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:8000/*", "https://supplier.meesho.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://supplier.meesho.com/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "action": { "default_title": "Shipping Tester panel dikhao/chhupao" }
+}

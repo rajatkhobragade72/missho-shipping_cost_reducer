@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fake Meesho panel</title></head>
+<body>
+  <h3>Fake Meesho catalogue page</h3>
+  <div class="upload-box"><input type="file" accept="image/jpeg,image/png" id="front"></div>
+  <div class="breakdown">
+    <div><span>Meesho Price</span> <span>₹101</span></div>
+    <div id="ship"><span>Shipping (added separately)</span> <span id="ship-val">₹0</span></div>
+  </div>
+  <script>
+    // Simulated Meesho behaviour: the charge depends on the uploaded file and appears after a delay.
+    document.getElementById("front").addEventListener("change", (e) => {
+      const f = e.target.files[0];
+      setTimeout(() => { document.getElementById("ship-val").textContent = `₹${1000 + (f.size % 900)}`; }, 1200);
+    });
+    const attach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function (opts) { return attach.call(this, { ...opts, mode: "open" }); };
+    const toB64 = (bytes) => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
+    async function handle(msg) {
+      if (msg.type === "latest") return (await fetch("/api/sessions/latest")).json();
+      if (msg.type === "image") return { b64: toB64(new Uint8Array(await (await fetch(`/api/image/${msg.session}/${msg.name}`)).arrayBuffer())) };
+      if (msg.type === "cost") {
+        await fetch("/api/costs", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session: msg.session, name: msg.name, cost: msg.cost, source: "meesho" }) });
+        return { ok: true };
+      }
+    }
+    window.chrome = {
+      runtime: { id: "test", onMessage: { addListener() {} },
+        async sendMessage(msg) { try { return { ok: true, data: await handle(msg) }; } catch (e) { return { ok: false, error: e.message }; } } },
+      storage: { local: { async get() { return { shipTesterCfg: { waitSec: 3, gapSec: 1, onlyUntested: true } }; }, async set() {} } },
+    };
+  </script>
+  <script src="content.js"></script>
+  <script>
+    setTimeout(() => {
+      const host = [...document.documentElement.children].find((e) => e.shadowRoot);
+      [...host.shadowRoot.querySelectorAll("button")].find((b) => b.textContent === "Test all images").click();
+    }, 2000);
+  </script>
+</body>
+</html>

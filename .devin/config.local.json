@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Exec(python)",
+      "Exec(.venv/Scripts/python)",
+      "Exec(.venv/Scripts/pip-audit)",
+      "Exec(sleep)",
+      "Exec(wc)",
+      "Exec(ls)",
+      "Exec(cp)"
+    ]
+  }
+}
