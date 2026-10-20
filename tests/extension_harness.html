@@ -3,20 +3,24 @@
 <head><meta charset="utf-8"><title>Fake Meesho panel</title></head>
 <body>
   <!--
-    Manual test page for extension/content.js. Copy this file to app/static/_harness.html and
-    extension/content.js to app/static/content.js, open /_harness.html (optionally ?method=drop),
-    then delete both copies. The page title ends up as "DONE <last uploaded file> <cost>".
+    Manual test page for extension/content.js. Serve this file next to a copy of
+    extension/content.js (e.g. copy both into a temp dir and run `python -m http.server`), open
+    /extension_harness.html (optionally ?method=drop) in a browser or headless Edge with
+    --dump-dom --virtual-time-budget=300000. The page title ends up as
+    "DONE hero=<result> | others=<n> | <status>".
   -->
   <h3>Fake Meesho catalogue page</h3>
   <div class="upload-box" id="box" style="border:2px dashed #999;padding:20px">
     <input type="file" accept="image/jpeg,image/png" id="front" style="display:none">
-    <img id="preview" alt="" width="80">
+    <img id="preview" alt="">
   </div>
   <button id="save" type="button">Save</button>
   <div class="breakdown">
     <div><span>Meesho Price</span> <span>₹101</span></div>
-    <div id="ship"><span>Shipping (added separately)</span> <span id="ship-val">₹1,613</span></div>
+    <div id="ship"><span>Shipping (added separately)</span> <span id="ship-val">₹90</span></div>
   </div>
+  <h4>Other images</h4>
+  <div id="others"></div>
   <script>
     // Simulated Meesho: upload shows a preview; the charge only recalculates after "Save".
     let pending = null;
@@ -29,33 +33,42 @@
       const f = pending;
       if (!f) return;
       setTimeout(() => {
-        const cost = 30 + (f.size % 60);
+        const cost = f.name === "original.jpg" ? 90 : 40 + (f.size % 60);
         document.getElementById("ship-val").textContent = `₹${cost}`;
         window.__lastApplied = `${f.name} ${cost}`;
       }, 1000);
     });
+    window.__others = [];
+    for (let i = 0; i < 4; i++) {
+      const slot = document.createElement("div");
+      const input = Object.assign(document.createElement("input"), { type: "file", accept: "image/*" });
+      const img = document.createElement("img");
+      img.width = 40;
+      input.addEventListener("change", () => { img.src = URL.createObjectURL(input.files[0]); window.__others.push(input.files[0].name); });
+      slot.append(input, img);
+      document.getElementById("others").append(slot);
+    }
+
+    function makeImage(color, w, h) {
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      const x = c.getContext("2d");
+      x.fillStyle = "#fff"; x.fillRect(0, 0, w, h);
+      x.fillStyle = color; x.fillRect(w * 0.2, h * 0.2, w * 0.6, h * 0.6);
+      return new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
+    }
+    makeImage("#c2185b", 600, 800).then((b) => { document.getElementById("preview").src = URL.createObjectURL(b); });
 
     const method = new URLSearchParams(location.search).get("method") || "input";
     const attach = Element.prototype.attachShadow;
     Element.prototype.attachShadow = function (opts) { return attach.call(this, { ...opts, mode: "open" }); };
-    const toB64 = (bytes) => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
-    async function handle(msg) {
-      if (msg.type === "ping") return { ok: true };
-      if (msg.type === "latest") return (await fetch("/api/sessions/latest")).json();
-      if (msg.type === "image") return { b64: toB64(new Uint8Array(await (await fetch(`/api/image/${msg.session}/${msg.name}`)).arrayBuffer())) };
-      if (msg.type === "cost") {
-        await fetch("/api/costs", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session: msg.session, name: msg.name, cost: msg.cost, source: "meesho" }) });
-        return { ok: true };
-      }
-    }
     window.chrome = {
       runtime: { id: "test", onMessage: { addListener() {} },
-        async sendMessage(msg) { try { return { ok: true, data: await handle(msg) }; } catch (e) { return { ok: false, error: e.message }; } } },
+        async sendMessage() { return { ok: false, error: "no background in harness" }; } },
       storage: { local: {
         async get() {
-          return { shipTesterCfg: { waitSec: 3, gapSec: 1, stepWaitSec: 1, onlyUntested: true, applyBest: true,
-            uploadMethod: method, uploadSelector: method === "drop" ? "#box" : "", steps: [{ selector: "#save", label: "Save" }] } };
+          return { shipOptimizerCfg: { tries: 6, target: 0, stickers: true, sameFrame: true, waitSec: 3, stepWaitSec: 1,
+            uploadMethod: method, heroSelector: method === "drop" ? "#box" : "", steps: [{ selector: "#save", label: "Save" }] } };
         },
         async set() {},
       } },
@@ -63,19 +76,24 @@
   </script>
   <script src="content.js"></script>
   <script>
-    let started = false;
-    setTimeout(() => {
-      const host = [...document.documentElement.children].find((e) => e.shadowRoot);
-      [...host.shadowRoot.querySelectorAll("button")].find((b) => b.textContent === "Test all images").click();
-      started = true;
-    }, 2000);
-    setInterval(() => {
-      const host = [...document.documentElement.children].find((e) => e.shadowRoot);
-      const status = host && host.shadowRoot.querySelector(".body > div:not(.sec)");
-      if (started && status && /Laga di|Ho gaya|NAHI|nahi|same|Roka/.test(status.textContent)) {
-        document.title = `DONE ${window.__lastApplied || "-"} | ${status.textContent}`;
-      }
-    }, 500);
+    const panel = () => [...document.documentElement.children].find((e) => e.shadowRoot)?.shadowRoot;
+    const button = (text) => [...panel().querySelectorAll("button")].find((b) => b.textContent.startsWith(text));
+    const statusText = () => panel().querySelector(".body > div:not(.card):not(.row):not(.muted):not(.result)")?.textContent || "";
+    const waitFor = async (re) => { while (!re.test(statusText())) await new Promise((r) => setTimeout(r, 500)); };
+    (async () => {
+      await new Promise((r) => setTimeout(r, 2000));
+      button("1.").click();
+      await waitFor(/Laga di|Dobara|NAHI|nahi|Roka/);
+      const hero = panel().querySelector(".result").textContent;
+      const files = await Promise.all(["#1976d2", "#388e3c"].map((c, i) => makeImage(c, 500, 500)
+        .then((b) => new File([b], `extra${i}.jpg`, { type: "image/jpeg" }))));
+      const dt = new DataTransfer();
+      files.forEach((f) => dt.items.add(f));
+      panel().querySelector("input[multiple]").files = dt.files;
+      button("2.").click();
+      await waitFor(/Photos laga di|nahi mila|nahi dikha|Pehle/);
+      document.title = `DONE hero=${hero} [${window.__lastApplied}] | others=${window.__others.join(",")} | ${statusText()}`;
+    })();
   </script>
 </body>
 </html>

@@ -1,21 +1,5 @@
-const API = "http://127.0.0.1:8000";
-const SESSION_RE = /^[0-9a-f]{32}$/;
-const NAME_RE = /^[A-Za-z0-9_-]{1,80}\.jpg$/;
-const MAX_UPLOAD_B64 = Math.ceil((15 * 1024 * 1024) / 3) * 4;
-
-async function call(path, options) {
-  let res;
-  try {
-    res = await fetch(`${API}${path}`, options);
-  } catch {
-    throw new Error("Local tool (127.0.0.1:8000) chalu nahi hai. Pehle server start karo.");
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(typeof body.detail === "string" ? body.detail : `Local tool error ${res.status}`);
-  }
-  return res;
-}
+const MEESHO = "https://supplier.meesho.com/";
+const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 
 function toBase64(bytes) {
   let bin = "";
@@ -23,45 +7,24 @@ function toBase64(bytes) {
   return btoa(bin);
 }
 
-function fromBase64(b64) {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
+function allowedImageUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && (url.hostname === "meesho.com" || url.hostname.endsWith(".meesho.com"));
+  } catch {
+    return false;
+  }
 }
 
 async function handle(msg) {
-  if (msg.type === "ping") return { ok: true };
-  if (msg.type === "latest") return (await call("/api/sessions/latest")).json();
-  if (msg.type === "hero") {
-    if (typeof msg.b64 !== "string" || msg.b64.length > MAX_UPLOAD_B64) throw new Error("Photo 15 MB se badi hai");
-    if (!/^image\/(jpeg|png|webp)$/.test(msg.mime)) throw new Error("Sirf JPG/PNG/WEBP photo chalegi");
-    const form = new FormData();
-    form.append("file", new Blob([fromBase64(msg.b64)], { type: msg.mime }), "product");
-    return (await call("/api/hero", { method: "POST", body: form })).json();
-  }
-  if (msg.type === "ai") {
-    if (!SESSION_RE.test(msg.session)) throw new Error("Invalid session");
-    const config = await (await call("/api/config")).json();
-    if (!config.ai_configured) return { variants: [], failed: [], skipped: true };
-    const form = new FormData();
-    form.append("session", msg.session);
-    config.ai_presets.forEach((p) => form.append("presets", p.key));
-    return (await call("/api/ai-variants", { method: "POST", body: form })).json();
-  }
-  if (!SESSION_RE.test(msg.session) || !NAME_RE.test(msg.name)) throw new Error("Invalid image reference");
-  if (msg.type === "image") {
-    const res = await call(`/api/image/${msg.session}/${msg.name}`);
-    return { b64: toBase64(new Uint8Array(await res.arrayBuffer())) };
-  }
-  if (msg.type === "cost") {
-    if (!Number.isFinite(msg.cost) || msg.cost < 0 || msg.cost > 100000) throw new Error("Invalid cost");
-    await call("/api/costs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session: msg.session, name: msg.name, cost: msg.cost, source: "meesho" }),
-    });
-    return { ok: true };
+  if (msg?.type === "fetchImage") {
+    if (typeof msg.url !== "string" || !allowedImageUrl(msg.url)) throw new Error("Image URL allowed nahi hai");
+    const res = await fetch(msg.url, { credentials: "omit" });
+    const type = res.headers.get("content-type") || "";
+    if (!res.ok || !/^image\/(jpeg|png|webp)/.test(type)) throw new Error("Front image download nahi hui");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length > MAX_IMAGE_BYTES) throw new Error("Image bahut badi hai");
+    return { b64: toBase64(bytes), type: type.split(";")[0] };
   }
   throw new Error("Unknown message");
 }
@@ -76,8 +39,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id || !tab.url?.startsWith("https://supplier.meesho.com/")) {
-    chrome.tabs.create({ url: API });
+  if (!tab.id || !tab.url?.startsWith(MEESHO)) {
+    chrome.tabs.create({ url: MEESHO });
     return;
   }
   try {

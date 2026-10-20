@@ -34,16 +34,23 @@ Pollinations default model is `black-forest-labs/flux.2-klein-4b` (not paid_only
 such as gemini-2.5-flash-image return HTTP 402 on free keys.
 
 ## Chrome extension (`extension/`, MV3)
-Reads the real shipping charge from the user's logged-in Meesho Supplier Panel. Content script on
-`https://supplier.meesho.com/*` injects a floating "Shipping Tester" panel (closed shadow DOM,
-textContent only). It gets the latest session from `GET /api/sessions/latest` (via the background
-service worker, which has host permission for 127.0.0.1:8000), sets each image on the page's
-`input[type=file]` via DataTransfer, waits for the text near "Shipping ... ₹" to change/stabilise,
-and posts it to `POST /api/costs` (stored in `data/sessions/<id>/costs.json`, source meesho|manual).
-Selectors auto-detect; "Pick upload box"/"Pick shipping cost" store a CSS path in chrome.storage.
-Never tested against the real panel (needs login); `tests/extension_harness.html` is a fake panel:
-copy it as `app/static/_harness.html` plus `extension/content.js` into `app/static/`, open
-`/_harness.html` (headless Edge works), then delete both copies.
+Standalone (does NOT need the local server), modelled on SnapSeller "Least Price Image" /
+Ecomdost / RapidSKU: the product photo is untouched, only a frame is added. Content script on
+`https://supplier.meesho.com/*` injects a "Meesho Shipping Optimizer" panel (closed shadow DOM,
+textContent only) with two buttons:
+1. Hero: takes the page's current front image (or a chosen file), reads the baseline cost, then
+   renders N canvas variations (7 border patterns x 4 widths x random palette, optional corner
+   sticker; seeded per run so re-runs try new colours), uploads each via DataTransfer on the
+   front `input[type=file]`, waits for text near "Shipping/Delivery ... ₹" to change/stabilise,
+   keeps the cheapest and re-applies it (original if nothing is cheaper). Optional target ₹ stops early.
+2. Other photos: uploads chosen files into the remaining image inputs (optionally with the winning frame).
+Background worker only fetches the front image from `https://*.meesho.com` (CORS) and toggles the panel.
+Selectors auto-detect; Setup has pickers (hero box, other box, shipping ₹, post-upload click steps)
+stored in chrome.storage (`shipOptimizerCfg`).
+Never tested against the real panel (needs login). `tests/extension_harness.html` is a fake panel:
+copy it plus `extension/content.js` into a temp dir, `python -m http.server`, then run headless Edge
+with `--dump-dom --virtual-time-budget=400000` on `/extension_harness.html` (and `?method=drop`);
+the title shows `DONE hero=... | others=...`.
 
 ## Verify
 ```
