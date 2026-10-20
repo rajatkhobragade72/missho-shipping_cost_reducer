@@ -9,7 +9,12 @@
       "Exec(ls)",
       "Exec(cp)",
       "Exec(Select-String)",
-      "Exec(node)"
+      "Exec(node)",
+      "Exec(Get-Process)",
+      "Exec(Start-Sleep)",
+      "Exec(\"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\")",
+      "Exec($out)",
+      "Exec(Out-String)"
     ]
   }
 }

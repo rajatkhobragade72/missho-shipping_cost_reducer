@@ -18,6 +18,7 @@
       <span class="change" id="change" style="color:#33c;cursor:pointer">CHANGE</span>
     </div>
   </div>
+  <div class="field"><label>Meesho Price</label><div><input id="price" type="text" value="101"></div></div>
   <div class="breakdown">
     <h4>Bank Settlement Breakdown</h4>
     <div><span>Meesho Price</span> <span>₹101</span></div>
@@ -49,16 +50,23 @@
       save.addEventListener("click", () => {
         if (!file) return;
         document.getElementById("front-img").src = URL.createObjectURL(file);
+        window.__front = file;
         modal.remove();
-        setTimeout(() => {
-          const cost = 40 + (file.size % 60);
-          document.getElementById("ship-val").textContent = `₹${cost}`;
-          window.__lastApplied = `${file.name} ${cost}`;
-        }, 1000);
       });
       modal.append(input, preview, save);
       document.body.append(modal);
       input.click();
+    });
+
+    // Like the real panel (as reported): the breakdown only recalculates when the price field changes.
+    document.getElementById("price").addEventListener("input", (e) => {
+      const f = window.__front;
+      if (!f || !e.target.value) return;
+      setTimeout(() => {
+        const cost = 40 + (f.size % 60);
+        document.getElementById("ship-val").textContent = `₹${cost}`;
+        window.__lastApplied = `${f.name} ${cost}`;
+      }, 1000);
     });
 
     // Other images: one "Add image" tile that keeps accepting files.
@@ -82,11 +90,19 @@
     Element.prototype.attachShadow = function (opts) { return attach.call(this, { ...opts, mode: "open" }); };
     window.chrome = {
       runtime: { id: "test", onMessage: { addListener() {} },
-        async sendMessage() { return { ok: false, error: "no background in harness" }; } },
+        // Fake local AI tool: two "different" photos of the product.
+        async sendMessage(msg) {
+          const toB64 = async (b) => { const u = new Uint8Array(await b.arrayBuffer()); let s = ""; for (const c of u) s += String.fromCharCode(c); return btoa(s); };
+          if (msg.type === "ping") return { ok: true, data: {} };
+          if (msg.type === "aiVariants") return { ok: true, data: { session: "s", failed: 0,
+            images: [{ name: "ai_a.jpg", label: "AI: angle" }, { name: "ai_b.jpg", label: "AI: compact" }] } };
+          if (msg.type === "localImage") return { ok: true, data: { b64: await toB64(await makeImage(msg.name === "ai_a.jpg" ? "#ff9800" : "#4caf50", 700, 700)) } };
+          return { ok: false, error: "no background in harness" };
+        } },
       storage: { local: {
         async get() {
           return { shipOptimizerCfg: { tries: 6, target: 0, stickers: true, sameFrame: true, waitSec: 3, stepWaitSec: 1,
-            uploadMethod: "input", steps: [] } };
+            uploadMethod: "input", steps: [], useAI: true, refreshPrice: true } };
         },
         async set() {},
       } },
@@ -98,6 +114,9 @@
     const button = (text) => [...panel().querySelectorAll("button")].find((b) => b.textContent.startsWith(text));
     const statusText = () => panel().querySelector(".body > div:not(.card):not(.row):not(.muted):not(.result)")?.textContent || "";
     const waitFor = async (re) => { while (!re.test(statusText())) await new Promise((r) => setTimeout(r, 500)); };
+    const progressTimer = setInterval(() => {
+      if (!document.title.startsWith("DONE")) document.title = `RUN ${statusText()} | ${panel()?.querySelector("ol")?.textContent.slice(0, 300)}`;
+    }, 1000);
     (async () => {
       await new Promise((r) => setTimeout(r, 2000));
       button("1.").click();
@@ -113,6 +132,7 @@
       button("Page report").click();
       await new Promise((r) => setTimeout(r, 500));
       window.__report = panel().querySelector("textarea").value;
+      clearInterval(progressTimer);
       document.title = `DONE hero=${hero} [${window.__lastApplied}] | others=${window.__others.join(",")} | ${statusText()}`;
       const pre = document.createElement("pre");
       pre.id = "report";

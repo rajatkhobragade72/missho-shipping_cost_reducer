@@ -49,6 +49,13 @@ Real panel (user screenshot): "Uploaded Images" block, front tile = thumbnail + 
 hero input is found via the "Front Image" tile; if none, the extension clicks CHANGE and grabs the
 file input it opens (capture-phase click listener + preventDefault, or a newly added input). With no
 custom steps, `autoConfirm` presses Save/Done/Crop/... inside visible dialogs (never "Submit").
+User reported the charge did not change after upload, so after each upload the extension checks the
+front thumbnail src really changed (logs "front image NAHI badli", stops after 3 with a hint to add a
+click step) and, if "refreshPrice" is on (default), re-enters the Meesho price field ("" then the old
+value, via the native value setter + input/change/blur) so the breakdown recalculates.
+Optional "AI se alag photos" checkbox: background posts the original to the local tool
+(`/api/hero` + `/api/ai-variants`, key stays server-side; needs host permission 127.0.0.1:8000),
+tests each AI photo raw first, then border variants cycle over [original, ...AI photos].
 Setup has "Page report copy karo" (inputs, ₹ texts, dialogs, log) for remote debugging.
 Background worker only fetches the front image from `https://*.meesho.com` (CORS) and toggles the panel.
 Selectors auto-detect; Setup has pickers (hero box, other box, shipping ₹, post-upload click steps)

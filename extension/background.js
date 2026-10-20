@@ -1,5 +1,49 @@
 const MEESHO = "https://supplier.meesho.com/";
+const LOCAL_TOOL = "http://127.0.0.1:8000";
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+const MAX_UPLOAD_B64 = Math.ceil(MAX_IMAGE_BYTES / 3) * 4;
+const SESSION_RE = /^[0-9a-f]{32}$/;
+const NAME_RE = /^[A-Za-z0-9_-]{1,80}\.jpg$/;
+
+async function local(path, options) {
+  let res;
+  try {
+    res = await fetch(`${LOCAL_TOOL}${path}`, options);
+  } catch {
+    throw new Error("Local tool (127.0.0.1:8000) chalu nahi hai");
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(typeof body.detail === "string" ? body.detail : `Local tool error ${res.status}`);
+  }
+  return res;
+}
+
+function fromBase64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+async function aiVariants(msg) {
+  if (typeof msg.b64 !== "string" || msg.b64.length > MAX_UPLOAD_B64) throw new Error("Photo 15 MB se badi hai");
+  if (!/^image\/(jpeg|png|webp)$/.test(msg.mime)) throw new Error("Sirf JPG/PNG/WEBP photo chalegi");
+  const config = await (await local("/api/config")).json();
+  if (!config.ai_configured) throw new Error("Local tool me POLLINATIONS_API_KEY set nahi hai (.env)");
+  const upload = new FormData();
+  upload.append("file", new Blob([fromBase64(msg.b64)], { type: msg.mime }), "product");
+  const { session } = await (await local("/api/hero", { method: "POST", body: upload })).json();
+  const form = new FormData();
+  form.append("session", session);
+  config.ai_presets.forEach((p) => form.append("presets", p.key));
+  const result = await (await local("/api/ai-variants", { method: "POST", body: form })).json();
+  return {
+    session,
+    images: result.variants.filter((v) => NAME_RE.test(v.name)).map((v) => ({ name: v.name, label: v.label })),
+    failed: result.failed.length,
+  };
+}
 
 function toBase64(bytes) {
   let bin = "";
@@ -17,6 +61,13 @@ function allowedImageUrl(raw) {
 }
 
 async function handle(msg) {
+  if (msg?.type === "ping") return { ok: true };
+  if (msg?.type === "aiVariants") return aiVariants(msg);
+  if (msg?.type === "localImage") {
+    if (!SESSION_RE.test(msg.session) || !NAME_RE.test(msg.name)) throw new Error("Invalid image reference");
+    const res = await local(`/api/image/${msg.session}/${msg.name}`);
+    return { b64: toBase64(new Uint8Array(await res.arrayBuffer())) };
+  }
   if (msg?.type === "fetchImage") {
     if (typeof msg.url !== "string" || !allowedImageUrl(msg.url)) throw new Error("Image URL allowed nahi hai");
     const res = await fetch(msg.url, { credentials: "omit" });

@@ -10,11 +10,15 @@
   const MAX_STEPS = 6;
   const MAX_SIDE = 1200;
   const MAX_OTHER_PHOTOS = 8;
+  const KEEPALIVE_MS = 20000;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const cfg = {
     heroSelector: "",
     otherSelector: "",
     costSelector: "",
+    priceSelector: "",
+    refreshPrice: true,
+    useAI: false,
     uploadMethod: "input",
     steps: [],
     waitSec: 6,
@@ -136,7 +140,9 @@
     return imageInputs().filter((i) => i !== hero && !tile?.contains(i));
   }
 
-  const CONFIRM_RE = /^(save|done|apply|crop|crop & save|save & continue|confirm|ok|okay|upload|use (this )?image|continue|proceed)$/i;
+  const CONFIRM_RE = /\b(save|done|apply|crop|confirm|ok|okay|upload|update|replace|use|continue|proceed|next|add)\b/i;
+  const DANGER_RE = /submit|cancel|delete|remove|discard|back|close|reset|skip|exit/i;
+  const isConfirm = (b) => { const t = ownText(b); return t.length <= 30 && CONFIRM_RE.test(t) && !DANGER_RE.test(t); };
   const DIALOG_SEL = "[role=dialog], [aria-modal=true], [class*=modal i], [class*=dialog i], [class*=popup i], [class*=drawer i]";
 
   // After an upload Meesho may open a crop/preview popup. Press its Save/Done (never "Submit").
@@ -145,7 +151,7 @@
       await sleep(1200);
       const btn = [...document.querySelectorAll(DIALOG_SEL)].filter((d) => visible(d) && !host.contains(d))
         .flatMap((d) => [...d.querySelectorAll("button, [role=button]")])
-        .find((b) => visible(b) && !b.disabled && CONFIRM_RE.test(ownText(b)));
+        .find((b) => visible(b) && !b.disabled && isConfirm(b));
       if (!btn) return;
       addLog(`Popup me "${ownText(btn)}" dabaya`);
       btn.click();
@@ -347,7 +353,7 @@
     button{background:#9f2089;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px}
     button.ghost{background:#eee;color:#333}
     button.stop{background:#b00020}
-    button:disabled{opacity:.5;cursor:wait}
+    button:disabled{opacity:.5;cursor:not-allowed}
     .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
     .muted{color:#666;font-size:12px}
     .err{color:#b00020;font-weight:600}
@@ -374,7 +380,8 @@
 
   const box = el("div", null, "box");
   const head = el("div", null, "head");
-  head.append(el("strong", "Meesho Shipping Optimizer"), el("span", "–"));
+  const version = chrome.runtime.getManifest?.().version;
+  head.append(el("strong", `Meesho Shipping Optimizer${version ? ` v${version}` : ""}`), el("span", "–"));
   const body = el("div", null, "body");
 
   const tip = el("div", "Pehle Meesho form me category, weight aur price bhar do, aur front image laga do (taaki Shipping ₹ dikhe).", "muted");
@@ -388,9 +395,10 @@
   const btnOthers = el("button", "2. Baaki photos lagao", "big");
   const otherFiles = Object.assign(el("input"), { type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true });
   const sameFrameBox = checkbox();
+  const aiBox = checkbox();
+  const refreshPriceBox = checkbox();
 
-  const btnStop = el("button", "Stop", "stop");
-  btnStop.disabled = true;
+  const btnStop = el("button", "Stop", "stop hidden");
   const progress = Object.assign(el("progress"), { max: 1, value: 0 });
   const status = el("div", "");
   const result = el("div", "", "result hidden");
@@ -401,6 +409,7 @@
   const btnPickHero = el("button", "Pick hero upload box", "ghost");
   const btnPickOther = el("button", "Pick other photos box", "ghost");
   const btnPickCost = el("button", "Pick shipping ₹", "ghost");
+  const btnPickPrice = el("button", "Pick price box", "ghost");
   const btnReset = el("button", "Auto-detect", "ghost");
   const methodSelect = el("select");
   [["input", "Upload: file input"], ["drop", "Upload: drag-drop"]].forEach(([v, t]) => {
@@ -418,7 +427,8 @@
 
   const setup = el("details");
   setup.append(el("summary", "Setup (sirf agar auto-detect kaam na kare)"), card(
-    detectInfo, row(btnPickHero, btnPickOther), row(btnPickCost, btnReset), row(methodSelect),
+    detectInfo, row(btnPickHero, btnPickOther), row(btnPickCost, btnPickPrice, btnReset), row(methodSelect),
+    labelled(refreshPriceBox, "Upload ke baad price dobara bhar ke shipping refresh karo"),
     row(el("span", "Min wait (sec):"), waitInput, el("span", "Step wait:"), stepWaitInput),
     el("div", "Agar image upload ke baad Meesho me Save / Done / Crop dabana padta hai, to '+ step' se wo button pick karo.", "muted"),
     stepsList, row(btnAddStep, btnClearSteps),
@@ -431,7 +441,8 @@
     card(btnHero,
       el("div", "Page ki front image use hogi. Chaho to yahan alag photo chuno:", "muted"), heroFile,
       row(el("span", "Kitni try karein:"), triesInput, el("span", "Target ₹:"), targetInput),
-      labelled(stickersBox, "Stickers / badges bhi try karo")),
+      labelled(stickersBox, "Stickers / badges bhi try karo"),
+      labelled(aiBox, "AI se alag photos bhi banao (local tool chalu hona chahiye)")),
     card(btnOthers, otherFiles, labelled(sameFrameBox, "Hero jaisa frame lagao")),
     row(btnStop, btnDownload), progress, status, result, log, setup,
   );
@@ -466,7 +477,7 @@
     const cost = readCost();
     detectInfo.textContent =
       `Hero: ${heroInput() ? "box mil gaya" : changeLink(frontTile()) ? "CHANGE se" : "NAHI mila"} | Other photo box: ${otherInputs().length} | ` +
-      `Shipping: ${cost !== null ? "₹" + cost : "nahi dikh raha"}`;
+      `Shipping: ${cost !== null ? "₹" + cost : "nahi dikh raha"} | Price box: ${findPriceInput() ? "mil gaya" : "nahi mila"}`;
   }
 
   const clamp = (v, lo, hi, dflt) => Math.min(hi, Math.max(lo, Number(v) || dflt));
@@ -476,6 +487,8 @@
     cfg.target = clamp(targetInput.value, 0, 5000, 0);
     cfg.stickers = stickersBox.checked;
     cfg.sameFrame = sameFrameBox.checked;
+    cfg.useAI = aiBox.checked;
+    cfg.refreshPrice = refreshPriceBox.checked;
     cfg.waitSec = clamp(waitInput.value, 3, 40, 6);
     cfg.stepWaitSec = clamp(stepWaitInput.value, 1, 20, 2);
     cfg.uploadMethod = methodSelect.value === "drop" ? "drop" : "input";
@@ -484,8 +497,10 @@
 
   function setBusy(busy) {
     running = busy;
-    [btnHero, btnOthers, btnAddStep, btnPickHero, btnPickOther, btnPickCost].forEach((b) => { b.disabled = busy; });
-    btnStop.disabled = !busy;
+    [btnHero, btnOthers, btnAddStep, btnPickHero, btnPickOther, btnPickCost, btnPickPrice].forEach((b) => { b.disabled = busy; });
+    btnStop.disabled = false;
+    btnStop.textContent = "Stop";
+    btnStop.classList.toggle("hidden", !busy);
   }
 
   // ---------- picker ----------
@@ -579,15 +594,58 @@
     return null;
   }
 
+  const frontSrc = () => {
+    const img = frontTile()?.querySelector("img");
+    return img ? img.currentSrc || img.src : null;
+  };
+
+  function findPriceInput() {
+    const picked = safeQuery(cfg.priceSelector);
+    if (picked) return picked.matches("input") ? picked : picked.querySelector("input");
+    const labels = [...document.querySelectorAll("label, p, span, div")].filter((n) =>
+      !host.contains(n) && n.children.length <= 2 && /^(meesho price|selling price|price)\s*\*?$/i.test(ownText(n)) && visible(n));
+    for (const label of labels) {
+      for (let n = label.parentElement, depth = 0; n && n !== document.body && depth < 3; n = n.parentElement, depth++) {
+        const input = n.querySelector("input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=hidden])");
+        if (input) return input;
+      }
+    }
+    return null;
+  }
+
+  // Meesho may only recalculate the breakdown when the price field changes: re-enter the same price.
+  async function refreshPrice() {
+    const input = findPriceInput();
+    if (!input?.value) return false;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    const value = input.value;
+    input.focus();
+    for (const v of ["", value]) {
+      setValue.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(300);
+    }
+    input.blur();
+    return true;
+  }
+
   async function tryHero(file) {
     const prevEl = findCostEl();
     const prevText = prevEl ? prevEl.textContent.trim() : null;
+    const beforeSrc = frontSrc();
     const input = heroInput() || (cfg.uploadMethod === "input" ? await heroInputViaChange() : null);
     if (!input && cfg.uploadMethod === "input") throw new Error("Front image ka upload box nahi mila (CHANGE dabane par bhi). Setup me 'Page report copy karo' dabao aur report bhejo.");
     const uploaded = await putFiles(input, cfg.heroSelector, [file]);
     await runSteps();
+    let frontChanged = beforeSrc === null ? null : false;
+    for (let t = 0; t < 10 && frontChanged === false; t++) {
+      if (frontSrc() !== beforeSrc) frontChanged = true;
+      else await sleep(POLL_MS);
+    }
+    if (cfg.refreshPrice) await refreshPrice();
     const cost = await waitForCost(prevText);
-    return { cost, uploaded };
+    return { cost, uploaded, frontChanged };
   }
 
   function b64ToFile(b64, name, type) {
@@ -609,6 +667,39 @@
       const { b64, type } = await bg({ type: "fetchImage", url: src });
       return b64ToFile(b64, "original.jpg", type);
     } catch { return null; }
+  }
+
+  function fileToB64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",")[1]);
+      reader.onerror = () => reject(new Error("Photo padh nahi paye"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function withKeepAlive(promise) {
+    const timer = setInterval(() => chrome.runtime.sendMessage({ type: "ping" }).catch(() => {}), KEEPALIVE_MS);
+    try { return await promise; } finally { clearInterval(timer); }
+  }
+
+  // Different-looking photos of the same product, made by the local tool's AI (Pollinations, key stays on the server).
+  async function aiSources(original) {
+    setStatus("AI se alag photos ban rahi hain (1-2 minute)...");
+    try {
+      const mime = /^image\/(jpeg|png|webp)$/.test(original.type) ? original.type : "image/jpeg";
+      const { session, images, failed } = await withKeepAlive(bg({ type: "aiVariants", b64: await fileToB64(original), mime }));
+      const photos = [];
+      for (const img of images) {
+        const { b64 } = await bg({ type: "localImage", session, name: img.name });
+        photos.push({ file: b64ToFile(b64, img.name, "image/jpeg"), label: img.label });
+      }
+      addLog(`AI: ${photos.length} alag photos bani${failed ? `, ${failed} fail` : ""}`);
+      return photos;
+    } catch (err) {
+      addLog(`AI photos nahi bani: ${err.message}. Sirf border wali variations try hongi.`);
+      return [];
+    }
   }
 
   function showResult(text) {
@@ -636,48 +727,73 @@
     if (baseline === null) throw new Error("Shipping ₹ nahi dikh raha. Pehle category/weight/price bharo, ya Setup me 'Pick shipping ₹' karo.");
     addLog(`Original: ₹${baseline}`);
 
-    const bitmap = await createImageBitmap(original);
+    const aiPhotos = cfg.useAI ? await aiSources(original) : [];
+    const bitmaps = [await createImageBitmap(original)];
+    for (const p of aiPhotos) bitmaps.push(await createImageBitmap(p.file));
     const seed = Math.floor(Math.random() * 1e6);
+    const total = aiPhotos.length + cfg.tries;
     let best = { cost: baseline, file: original, spec: null, label: "Original" };
     let lastFile = original;
     let readFails = 0;
     let notUploaded = 0;
-    progress.max = cfg.tries;
-    for (let i = 0; i < cfg.tries && !stopRequested; i++) {
-      const spec = variantSpec(i, seed, cfg.stickers);
-      const label = `#${i + 1} ${specLabel(spec)}`;
-      setStatus(`${i + 1}/${cfg.tries} try ho rahi hai... (abhi tak best ₹${best.cost})`);
-      const file = await renderVariant(bitmap, spec, `hero_${i + 1}.jpg`);
-      const { cost, uploaded } = await tryHero(file);
+    let notSaved = 0;
+    let sameAsOriginal = 0;
+    let stuck = false;
+    progress.max = total;
+    for (let i = 0; i < total && !stopRequested; i++) {
+      let file, spec = null, label;
+      if (i < aiPhotos.length) {
+        ({ file, label } = aiPhotos[i]);
+      } else {
+        const k = i - aiPhotos.length;
+        const src = k % bitmaps.length;
+        spec = variantSpec(k, seed, cfg.stickers);
+        label = `#${k + 1} ${src ? `AI photo ${src} + ` : ""}${specLabel(spec)}`;
+        file = await renderVariant(bitmaps[src], spec, `hero_${k + 1}.jpg`);
+      }
+      setStatus(`${i + 1}/${total} try ho rahi hai... (abhi tak best ₹${best.cost})`);
+      const { cost, uploaded, frontChanged } = await tryHero(file);
       lastFile = file;
       progress.value = i + 1;
       if (!uploaded) notUploaded++;
+      if (frontChanged === false) notSaved++;
+      const savedNote = frontChanged === false ? "  (front image NAHI badli)" : "";
       if (cost === null) {
         readFails++;
-        addLog(`${label}: cost nahi padh paya`);
+        addLog(`${label}: cost nahi padh paya${savedNote}`);
       } else {
-        addLog(`${label}: ₹${cost}${cost < best.cost ? "  ← naya best" : ""}`);
+        addLog(`${label}: ₹${cost}${cost < best.cost ? "  ← naya best" : ""}${savedNote}`);
         if (cost < best.cost) best = { cost, file, spec, label };
+        if (cost === baseline) sameAsOriginal++;
       }
+      if (i === 4 && sameAsOriginal === 5) { stuck = true; break; }
       if (i === 2 && notUploaded === 3) throw new Error("Image upload nahi ho rahi (preview nahi badla). Setup me 'Upload: drag-drop' try karo ya 'Pick hero upload box' karo.");
+      if (i === 2 && notSaved === 3) throw new Error("Image upload to hui par Front Image save nahi hui. Popup me jo button dabana padta hai (jaise Save/Crop), use Setup me '+ Upload ke baad click step' se pick karo, phir dobara chalao.");
       if (i === 2 && readFails === 3) throw new Error("Shipping ₹ padh nahi pa rahe. Setup me 'Pick shipping ₹' karo.");
       if (cfg.target && best.cost <= cfg.target) { addLog(`Target ₹${cfg.target} mil gaya, ruk gaye.`); break; }
     }
-    bitmap.close();
+    bitmaps.forEach((b) => b.close());
 
+    const improved = best.file !== original;
     if (best.file !== lastFile) {
-      setStatus(best.spec ? "Sabse sasti image wapas laga rahe hain..." : "Koi variation sasti nahi mili, original wapas laga rahe hain...");
+      setStatus(improved ? "Sabse sasti image wapas laga rahe hain..." : "Koi variation sasti nahi mili, original wapas laga rahe hain...");
       const confirm = (await tryHero(best.file)).cost;
       if (confirm !== null && confirm !== best.cost) addLog(`Dhyan do: wapas lagane par ₹${confirm} dikha (pehle ₹${best.cost}).`);
     }
-    winner = best.spec ? best : null;
-    if (best.spec) {
+    winner = improved ? best : null;
+    if (improved) {
       showResult(`Pehle ₹${baseline} → Ab ₹${best.cost}  (₹${baseline - best.cost} bacha)`);
       btnDownload.classList.remove("hidden");
       setStatus(`Laga di: ${best.label}. Ab form check karke khud Submit karo.`);
     } else {
       showResult(`Original hi sabse sasta hai: ₹${baseline}`);
-      setStatus(stopRequested ? "Roka gaya. Original wapas laga di." : "Dobara chalao (har baar naye colours try hote hain) ya 'Kitni try' badhao.");
+      if (stuck) {
+        showResult(`5 alag images par bhi shipping ₹${baseline} hi raha, isliye ruk gaye.`);
+        setStatus("Lagta hai Meesho shipping dobara calculate nahi kar raha. Setup kholo: 'Price box: mil gaya' dikhna chahiye (nahi to 'Pick price box' karo). Phir bhi same aaye to 'Page report copy karo' dabake report bhejo.", true);
+      } else {
+        showResult(`Original hi sabse sasta hai: ₹${baseline}`);
+        setStatus(stopRequested ? "Roka gaya. Original wapas laga di." : "Dobara chalao (har baar naye colours try hote hain) ya 'Kitni try' badhao.");
+      }
     }
   }
 
@@ -737,7 +853,9 @@
       ...[...document.querySelectorAll("body *")].filter((n) => !host.contains(n) && n.children.length === 0 && n.textContent.includes("₹"))
         .slice(0, 25).map((n) => ` - "${short(n.parentElement?.parentElement?.textContent, 90)}"`),
       `dialogs: ${[...document.querySelectorAll(DIALOG_SEL)].filter(visible).map((d) => short(d.textContent, 60)).join(" || ") || "none"}`,
-      `cfg: steps=${cfg.steps.length} method=${cfg.uploadMethod} picked=${[cfg.heroSelector, cfg.otherSelector, cfg.costSelector].map(Boolean)}`,
+      `cfg: steps=${cfg.steps.length} method=${cfg.uploadMethod} picked=${[cfg.heroSelector, cfg.otherSelector, cfg.costSelector, cfg.priceSelector].map(Boolean)} refreshPrice=${cfg.refreshPrice} ai=${cfg.useAI}`,
+      `priceInput: ${findPriceInput() ? cssPath(findPriceInput()) : "none"} frontSrc: ${short(frontSrc(), 60)}`,
+      `buttons in dialogs: ${[...document.querySelectorAll(DIALOG_SEL)].filter(visible).flatMap((d) => [...d.querySelectorAll("button, [role=button]")]).map((b) => short(ownText(b), 25)).join(" | ") || "none"}`,
       "log:", ...[...log.children].slice(0, 15).map((li) => ` - ${li.textContent}`),
       `status: ${status.textContent}`,
     ];
@@ -756,7 +874,12 @@
   // ---------- events ----------
   btnHero.addEventListener("click", () => guarded(optimizeHero));
   btnOthers.addEventListener("click", () => guarded(addOtherPhotos));
-  btnStop.addEventListener("click", () => { stopRequested = true; setStatus("Rok rahe hain..."); });
+  btnStop.addEventListener("click", () => {
+    stopRequested = true;
+    btnStop.disabled = true;
+    btnStop.textContent = "Ruk raha hai...";
+    setStatus("Rok rahe hain... (chalu wali image ka kaam khatam hote hi rukega)");
+  });
   btnDownload.addEventListener("click", () => {
     if (!winner) return;
     const a = el("a");
@@ -774,6 +897,10 @@
   btnPickOther.addEventListener("click", () => pick("Page par baaki photos wale upload box par click karo", (t) => {
     cfg.otherSelector = cssPath(t);
     setStatus("Other photos box set ho gaya.");
+  }));
+  btnPickPrice.addEventListener("click", () => pick("Page par Meesho price wale box par click karo", (t) => {
+    cfg.priceSelector = cssPath(t);
+    setStatus("Price box set ho gaya.");
   }));
   btnPickCost.addEventListener("click", () => pick("Page par 'Shipping ₹...' wale hisse par click karo", (t) => {
     cfg.costSelector = cssPath(t);
@@ -808,11 +935,12 @@
     cfg.heroSelector = "";
     cfg.otherSelector = "";
     cfg.costSelector = "";
+    cfg.priceSelector = "";
     await saveCfg();
     refreshDetect();
     setStatus("Auto-detect par wapas.");
   });
-  [triesInput, targetInput, stickersBox, sameFrameBox, waitInput, stepWaitInput, methodSelect]
+  [triesInput, targetInput, stickersBox, sameFrameBox, aiBox, refreshPriceBox, waitInput, stepWaitInput, methodSelect]
     .forEach((n) => n.addEventListener("change", saveCfg));
 
   chrome.storage.local.get("shipOptimizerCfg").then(({ shipOptimizerCfg }) => {
@@ -822,6 +950,8 @@
     targetInput.value = cfg.target;
     stickersBox.checked = cfg.stickers;
     sameFrameBox.checked = cfg.sameFrame;
+    aiBox.checked = cfg.useAI;
+    refreshPriceBox.checked = cfg.refreshPrice;
     waitInput.value = cfg.waitSec;
     stepWaitInput.value = cfg.stepWaitSec;
     methodSelect.value = cfg.uploadMethod;
