@@ -14,6 +14,9 @@
   const MAX_SIDE = 1200;
   const MAX_OTHER_PHOTOS = 8;
   const KEEPALIVE_MS = 20000;
+  // Meesho answers late and can show the previous photo's number first: a reading is only trusted
+  // once it has changed (or after this long without a change, which means the charge is the same).
+  const CHANGE_GRACE_MS = 15000;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const cfg = {
     heroSelector: "",
@@ -29,12 +32,15 @@
     tries: 30,
     stickers: false,
     look: "nice",
+    autoTune: true,
     extrasMode: "make",
     fourth: "size",
-    target: 0,
+    target: 40,
+    targetVersion: 0,
     sameFrame: true,
   };
   let running = false;
+  let autoRun = 0;
   let stopRequested = false;
   let winner = null;
 
@@ -480,10 +486,10 @@
     return [Math.round(bitmap.width * scale), Math.round(bitmap.height * scale)];
   }
 
-  function toJpeg(canvas, name) {
+  function toJpeg(canvas, name, quality = 0.9) {
     return new Promise((resolve, reject) => canvas.toBlob(
       (blob) => (blob ? resolve(new File([blob], name, { type: "image/jpeg" })) : reject(new Error("Image ban nahi payi"))),
-      "image/jpeg", 0.9,
+      "image/jpeg", quality,
     ));
   }
 
@@ -506,6 +512,189 @@
     ctx.drawImage(bitmap, b + (iw - dw) / 2, b + (ih - dh) / 2, dw, dh);
     if (spec.sticker) paintSticker(ctx, w, h, spec);
     return toJpeg(canvas, name);
+  }
+
+  // ---------- auto-tune: how the product sits in the frame ----------
+  // Meesho works the product's size out of the catalogue image, so how much of the frame the product
+  // fills, how big the file is and whether the background is plain all move the shipping charge.
+  // These helpers crop the photo to the product and re-render it at a chosen size, so the extension
+  // can test those levers against the real number instead of guessing.
+  function trimBox(bitmap, tolerance = 26) {
+    const S = 200;
+    const scale = Math.min(1, S / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    let data;
+    try { data = ctx.getImageData(0, 0, w, h).data; } catch { return null; }
+    const corner = (x, y) => { const i = (y * w + x) * 4; return [data[i], data[i + 1], data[i + 2]]; };
+    const samples = [corner(0, 0), corner(w - 1, 0), corner(0, h - 1), corner(w - 1, h - 1)];
+    const bg = [0, 1, 2].map((i) => samples.map((s) => s[i]).sort((a, b) => a - b)[1]);
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const d = Math.abs(data[i] - bg[0]) + Math.abs(data[i + 1] - bg[1]) + Math.abs(data[i + 2] - bg[2]);
+        if (d > tolerance * 3) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX || maxY < minY) return null;
+    return { x: minX / scale, y: minY / scale, w: (maxX - minX + 1) / scale, h: (maxY - minY + 1) / scale };
+  }
+
+  async function cropBitmap(bitmap, box) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(box.w));
+    c.height = Math.max(1, Math.round(box.h));
+    c.getContext("2d").drawImage(bitmap, box.x, box.y, box.w, box.h, 0, 0, c.width, c.height);
+    return createImageBitmap(c);
+  }
+
+  // Crops to the product when the background is plain; keeps the photo as it is otherwise.
+  async function trimmedVersion(bitmap) {
+    const box = trimBox(bitmap);
+    if (!box) return bitmap;
+    if (box.w < bitmap.width * 0.2 || box.h < bitmap.height * 0.2) return bitmap;
+    if (box.w > bitmap.width * 0.995 && box.h > bitmap.height * 0.995) return bitmap;
+    return cropBitmap(bitmap, box);
+  }
+
+  const AUTO_PLAN = { view: "trim", fill: 0.9, size: 1100, quality: 0.9, style: "white", aspect: "1:1", palette: null, src: "photo" };
+
+  // AI presets in the order that is worth testing: the ones where the product sits small in the frame
+  // first, because Meesho reads the product's size out of the picture.
+  const AUTO_PRESETS = [
+    "compact", "podium", "top-view", "clean-white", "light-grey", "soft-shadow",
+    "elevated", "angle-34", "side-view", "front-tight", "closeup", "pastel",
+  ];
+
+  function planLabel(p) {
+    const bits = [p.view === "trim" ? "product cut" : "full photo", `${Math.round(p.fill * 100)}% fill`, `${p.size}px`, p.style];
+    if (p.aspect !== "1:1") bits.push(p.aspect);
+    if (p.quality !== 0.9) bits.push(`q${p.quality}`);
+    if (p.src === "ai") bits.push("AI");
+    return bits.join(" | ");
+  }
+
+  function planKey(p) {
+    return [p.src, p.view, p.fill, p.size, p.quality, p.style, p.aspect, p.palette || ""].join("|");
+  }
+
+  function renderAuto(bitmap, plan, name) {
+    const S = plan.size;
+    const [W, H] = plan.aspect === "4:5" ? [S, Math.round(S * 1.25)]
+      : plan.aspect === "3:4" ? [Math.round(S * 0.75), S]
+      : [S, S];
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    const pal = PALETTES.find((x) => x.name === plan.palette) || PALETTES[1];
+    ctx.fillStyle = plan.style === "pastel" ? pal.bg : "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+    let box = { x: 0, y: 0, w: W, h: H };
+    if (plan.style === "card") {
+      const pad = Math.round(Math.min(W, H) * 0.05);
+      box = { x: pad, y: pad, w: W - 2 * pad, h: H - 2 * pad };
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.16)";
+      ctx.shadowBlur = Math.min(W, H) * 0.03;
+      ctx.shadowOffsetY = Math.min(W, H) * 0.012;
+      ctx.fillStyle = "#ffffff";
+      roundRect(ctx, box.x, box.y, box.w, box.h, Math.min(W, H) * 0.04);
+      ctx.fill();
+      ctx.restore();
+    }
+    const fit = Math.min(box.w / bitmap.width, box.h / bitmap.height) * plan.fill;
+    const dw = bitmap.width * fit;
+    const dh = bitmap.height * fit;
+    ctx.drawImage(bitmap, box.x + (box.w - dw) / 2, box.y + (box.h - dh) / 2, dw, dh);
+    return toJpeg(canvas, name, plan.quality);
+  }
+
+  // One photo per lever, so the first round already says which lever moved the price.
+  function autoLadder() {
+    const P = (o) => ({ ...AUTO_PLAN, ...o });
+    return [
+      P({ fill: 0.98 }),
+      P({ fill: 0.85 }),
+      P({ fill: 0.7 }),
+      P({ fill: 0.55 }),
+      P({ view: "full", fill: 0.95 }),
+      P({ view: "full", fill: 0.7 }),
+      P({ style: "pastel", fill: 0.85, palette: "mint" }),
+      P({ style: "card", fill: 0.8, palette: "blush" }),
+      P({ size: 800, quality: 0.65 }),
+      P({ size: 1000, quality: 0.8 }),
+      P({ aspect: "4:5", fill: 0.9 }),
+      P({ aspect: "3:4", fill: 0.9 }),
+    ];
+  }
+
+  const AXIS_VALUES = {
+    fill: [0.5, 0.6, 0.7, 0.8, 0.9, 0.98],
+    size: [800, 1000, 1100],
+    quality: [0.6, 0.75, 0.9],
+    view: ["trim", "full"],
+    style: ["white", "pastel", "card"],
+    aspect: ["1:1", "4:5", "3:4"],
+  };
+
+  // Which lever moved the price the most? That one is worth spending the rest of the tries on.
+  function axisSensitivity(plans, results) {
+    const costOf = new Map();
+    for (const r of results) if (r.plan && r.cost !== null) costOf.set(planKey(r.plan), r.cost);
+    const axes = [];
+    for (const axis of Object.keys(AXIS_VALUES)) {
+      const byValue = new Map();
+      for (const p of plans) {
+        const c = costOf.get(planKey(p));
+        if (c === undefined) continue;
+        const v = String(p[axis]);
+        if (!byValue.has(v) || c < byValue.get(v)) byValue.set(v, c);
+      }
+      const values = [...byValue.values()];
+      axes.push({ axis, byValue, spread: values.length > 1 ? Math.max(...values) - Math.min(...values) : 0 });
+    }
+    axes.sort((a, b) => b.spread - a.spread);
+    return axes;
+  }
+
+  // Neighbour plans around the winner: one axis at a time, the values that already looked cheap first.
+  function mutationPlans(best, axes, tried, limit) {
+    const out = [];
+    const seen = new Set(tried);
+    const push = (plan) => {
+      const key = planKey(plan);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      out.push(plan);
+      return out.length >= limit;
+    };
+    for (const { axis, byValue } of axes) {
+      const options = AXIS_VALUES[axis]
+        .filter((v) => String(v) !== String(best[axis]))
+        .map((v) => ({ v, known: byValue.get(String(v)) }))
+        .sort((a, b) => (a.known ?? Infinity) - (b.known ?? Infinity));
+      for (const { v } of options) if (push({ ...best, [axis]: v })) return out;
+    }
+    // The fill is usually the strongest lever, so step around the winning value as well.
+    for (const delta of [0.08, -0.08, 0.16, -0.16]) {
+      const fill = Math.min(0.99, Math.max(0.4, Math.round((best.fill + delta) * 100) / 100));
+      if (fill === best.fill) continue;
+      if (push({ ...best, fill })) return out;
+    }
+    return out;
   }
 
   // ---------- panel UI (shadow DOM, textContent only) ----------
@@ -568,9 +757,14 @@
 
   const btnHero = el("button", "1. Hero image ki shipping kam karo", "big");
   const heroFile = Object.assign(el("input"), { type: "file", accept: "image/jpeg,image/png,image/webp" });
-  const triesInput = numInput(5, 80);
+  const triesInput = numInput(5, 120);
+  triesInput.id = "opt-tries";
   const targetInput = numInput(0, 5000);
+  targetInput.id = "opt-target";
+  targetInput.value = 40;
   const stickersBox = checkbox();
+  const autoBox = checkbox();
+  autoBox.checked = true;
   const lookSelect = el("select");
   [["nice", "Look: Sundar (recommended)"], ["variety", "Look: Rang-birange (zyada variety)"]]
     .forEach(([v, t]) => { const o = el("option", t); o.value = v; lookSelect.append(o); });
@@ -640,7 +834,9 @@
     tip,
     card(btnHero,
       el("div", "Page ki front image use hogi. Chaho to yahan alag photo chuno:", "muted"), heroFile,
-      row(el("span", "Kul kitni photos try karein (5-80):"), triesInput),
+      labelled(autoBox, "Auto-tune: photo ke har tarah ke size/frame try karke sabse sasta shipping dhoondo (recommended)"),
+      el("div", "Auto-tune on: product ko cut karke alag-alag size, fill aur background me bana kar Meesho ka asli number padha jata hai, phir jo number kam aaya usi ko thoda aur sudhaara jata hai. Har photo me 15-20 second lagte hain.", "muted"),
+      row(el("span", "Kul kitni photos try karein (5-120):"), triesInput),
       row(el("span", "Target shipping ₹:"), targetInput),
       el("div", "Itna ya isse kam shipping milte hi ruk jayega. 0 = saari photos try karo.", "muted"),
       lookSelect, btnPreview,
@@ -691,11 +887,15 @@
   const clamp = (v, lo, hi, dflt) => Math.min(hi, Math.max(lo, Number(v) || dflt));
 
   async function saveCfg() {
-    cfg.tries = clamp(triesInput.value, 5, 80, 30);
-    cfg.target = clamp(targetInput.value, 0, 5000, 0);
+    cfg.tries = clamp(triesInput.value, 5, 120, 30);
+    // Target 0 = "band". clamp(0) par default aa jata hai, isliye alag parse (0 ko 0 hi rehne dena hai).
+    const targetNum = Number(targetInput.value);
+    cfg.target = Number.isFinite(targetNum) ? Math.min(5000, Math.max(0, targetNum)) : 40;
+    cfg.targetVersion = 2;
     triesInput.value = cfg.tries;
     targetInput.value = cfg.target;
     cfg.stickers = stickersBox.checked;
+    cfg.autoTune = autoBox.checked;
     cfg.look = lookSelect.value === "variety" ? "variety" : "nice";
     cfg.extrasMode = extrasModeSelect.value === "asis" ? "asis" : "make";
     cfg.fourth = fourthSelect.value === "daily" ? "daily" : "size";
@@ -791,20 +991,30 @@
   }
 
   // Meesho answers asynchronously and an old response can land first, so never take the first change:
-  // wait a minimum time and require the value to stay unchanged for STABLE_MS.
-  async function waitForCost() {
+  // wait a minimum time, wait for the number to actually move away from the pre-upload one, and
+  // require the value to stay unchanged for STABLE_MS before believing it.
+  async function waitForCost(previous) {
     const start = Date.now();
     const minWait = Math.max(MIN_READ_WAIT_MS, cfg.waitSec * 1000);
     let last;
     let stableSince = start;
+    let moved = previous === null || previous === undefined;
     while (Date.now() - start < MAX_WAIT_MS && !stopRequested) {
       await sleep(POLL_MS);
       const costEl = findCostEl();
       const text = costEl ? costEl.textContent.trim() : null;
-      if (text !== last) { last = text; stableSince = Date.now(); }
-      if (text !== null && Date.now() - start >= minWait && Date.now() - stableSince >= STABLE_MS) return parseCost(text);
+      if (text !== last) {
+        last = text;
+        stableSince = Date.now();
+        const value = text === null ? null : parseCost(text);
+        if (value !== null && previous !== null && previous !== undefined && value !== previous) moved = true;
+      }
+      if (text !== null && Date.now() - start >= minWait && Date.now() - stableSince >= STABLE_MS) {
+        // No change after a long wait means this photo really costs the same as the last one.
+        if (moved || Date.now() - start >= CHANGE_GRACE_MS) return parseCost(text);
+      }
     }
-    return null;
+    return last === null ? null : parseCost(last);
   }
 
   const frontSrc = () => {
@@ -862,6 +1072,7 @@
 
   async function tryHero(file) {
     const beforeSrc = frontSrc();
+    const beforeCost = readCost();
     const input = heroInput() || (cfg.uploadMethod === "input" ? await heroInputViaChange() : null);
     if (!input && cfg.uploadMethod === "input") throw new Error("Front image ka upload box nahi mila (CHANGE dabane par bhi). Setup me 'Page report copy karo' dabao aur report bhejo.");
     const uploaded = await putFiles(input, cfg.heroSelector, [file]);
@@ -872,7 +1083,7 @@
       else await sleep(POLL_MS);
     }
     if (cfg.refreshPrice) await refreshPrice();
-    const cost = await waitForCost();
+    const cost = await waitForCost(beforeCost);
     return { cost, uploaded, frontChanged };
   }
 
@@ -912,11 +1123,11 @@
   }
 
   // Different-looking photos of the same product, made by the local tool's AI (Pollinations, key stays on the server).
-  async function aiSources(original, max) {
+  async function aiSources(original, max, presets) {
     setStatus("AI se alag photos ban rahi hain (1-2 minute)...");
     try {
       const mime = /^image\/(jpeg|png|webp)$/.test(original.type) ? original.type : "image/jpeg";
-      const { session, images, failed } = await withKeepAlive(bg({ type: "aiVariants", b64: await fileToB64(original), mime, max }));
+      const { session, images, failed } = await withKeepAlive(bg({ type: "aiVariants", b64: await fileToB64(original), mime, max, presets }));
       const photos = [];
       for (const img of images) {
         const { b64 } = await bg({ type: "localImage", session, name: img.name });
@@ -997,14 +1208,30 @@
     const source = heroFile.files[0] || await pageHeroFile();
     if (!source) throw new Error("Photo nahi mili. Upar 'Choose file' se hero photo chuno.");
     setStatus("Look bana rahe hain...");
-    const bitmap = await createImageBitmap(source);
-    previewSeed = Math.floor(Math.random() * 1e6);
     const list = [];
-    for (let k = 0; k < MAX_CHOICES; k++) {
-      const spec = variantSpec(k, previewSeed, cfg.stickers, cfg.look);
-      list.push({ file: await renderVariant(bitmap, spec, `look_${k + 1}.jpg`), spec, label: `#${k + 1} ${specLabel(spec)}` });
+    if (cfg.autoTune) {
+      const full = await createImageBitmap(source);
+      const trimmed = await trimmedVersion(full);
+      // Wahi ladder jo agli run try karegi (jitter included), taaki preview aur run match karein.
+      const jitter = [0, 2, -2, 4, -4][autoRun % 5] * 0.02;
+      const ladder = autoLadder().slice(0, MAX_CHOICES).map((p) => (jitter
+        ? { ...p, fill: Math.min(0.99, Math.max(0.4, Math.round((p.fill + jitter) * 100) / 100)) }
+        : p));
+      for (const [k, plan] of ladder.entries()) {
+        const bmp = plan.view === "trim" ? trimmed : full;
+        list.push({ file: await renderAuto(bmp, plan, `look_${k + 1}.jpg`), spec: null, label: planLabel(plan) });
+      }
+      full.close();
+      if (trimmed !== full) trimmed.close();
+    } else {
+      const bitmap = await createImageBitmap(source);
+      previewSeed = Math.floor(Math.random() * 1e6);
+      for (let k = 0; k < MAX_CHOICES; k++) {
+        const spec = variantSpec(k, previewSeed, cfg.stickers, cfg.look);
+        list.push({ file: await renderVariant(bitmap, spec, `look_${k + 1}.jpg`), spec, label: `#${k + 1} ${specLabel(spec)}` });
+      }
+      bitmap.close();
     }
-    bitmap.close();
     result.classList.add("hidden");
     renderChoices(list, null, null, "Look preview (abhi Meesho par test nahi hui). Photo par click = badi dikhegi. 'Ye lagao' = seedha laga ke shipping dekho.");
     setStatus("Ye pehli 6 photos ka look hai. Pasand aaye to '1. Hero image...' dabao (yahi look try honge), nahi to dobara 'Pehle look dekho' dabao.");
@@ -1037,64 +1264,139 @@
 
     // The user's number is the total: AI photos count towards it, border variants fill the rest.
     const total = cfg.tries;
-    const aiPhotos = cfg.useAI ? (await aiSources(original, total)).slice(0, total) : [];
-    const bitmaps = [await createImageBitmap(original)];
-    for (const p of aiPhotos) bitmaps.push(await createImageBitmap(p.file));
-    const seed = previewSeed ?? Math.floor(Math.random() * 1e6);
-    previewSeed = null;
-    let best = { cost: baseline, file: original, spec: null, label: "Original" };
     const results = [];
+    let best = { cost: baseline, file: original, spec: null, label: "Original" };
+    let bestPlan = null;
+    let bestPlanCost = Infinity;
+    let count = 0;
     let lastFile = original;
     let readFails = 0;
-    let notUploaded = 0;
-    let notSaved = 0;
+    let failsInARow = 0;
     let sameAsOriginal = 0;
     let stuck = false;
+    let stopSearch = false;
+    const triedKeys = new Set();
     progress.max = total;
-    for (let i = 0; i < total && !stopRequested; i++) {
-      // AI photos can redraw the product (texture/size) or garble text, so they are only offered in the
-      // gallery for the user to judge; auto-apply only uses images built from the untouched original.
-      let file, spec = null, label, ai = true;
-      if (i < aiPhotos.length) {
-        ({ file, label } = aiPhotos[i]);
-      } else {
-        const k = i - aiPhotos.length;
-        const src = k % bitmaps.length;
-        ai = src !== 0;
-        spec = variantSpec(k, seed, cfg.stickers, cfg.look);
-        label = `#${k + 1} ${ai ? `AI photo ${src} + ` : ""}${specLabel(spec)}`;
-        file = await renderVariant(bitmaps[src], spec, `hero_${k + 1}.jpg`);
-      }
-      setStatus(`${i + 1}/${total} try ho rahi hai... (asli photo ka best ₹${best.cost})`);
-      const { cost, uploaded, frontChanged } = await tryHero(file);
-      lastFile = file;
-      progress.value = i + 1;
-      if (!uploaded) notUploaded++;
-      if (frontChanged === false) notSaved++;
+
+    // Uploads one photo, waits for Meesho's own number and remembers it.
+    const testCandidate = async (cand) => {
+      setStatus(`${count + 1}/${total} try ho rahi hai... (ab tak ka best ₹${best.cost}${cfg.target ? `, target ₹${cfg.target}` : ""})`);
+      const { cost, uploaded, frontChanged } = await tryHero(cand.file);
+      lastFile = cand.file;
+      count++;
+      progress.value = count;
+      // A photo Meesho does not accept (too small, odd shape) must not kill the whole run: only a
+      // streak of failures means the upload itself is broken.
+      const landed = uploaded && frontChanged !== false;
+      failsInARow = landed ? 0 : failsInARow + 1;
       const savedNote = frontChanged === false ? "  (front image NAHI badli)" : "";
+      if (!landed) addLog(`${cand.label}: photo Meesho par nahi lagi (skip kiya)${savedNote}`);
       if (cost === null) {
         readFails++;
-        addLog(`${label}: cost nahi padh paya${savedNote}`);
+        addLog(`${cand.label}: cost nahi padh paya${savedNote}`);
       } else {
-        const mark = cost < best.cost ? (ai ? "  ← sasta par AI (khud check karo)" : "  ← naya best") : "";
-        addLog(`${label}: ₹${cost}${mark}${savedNote}`);
-        if (!ai && cost < best.cost) best = { cost, file, spec, label };
-        if (cost < baseline) results.push({ cost, file, spec, label, ai });
+        const mark = cost < best.cost ? (cand.ai ? "  ← sasta par AI (khud check karo)" : "  ← naya best") : "";
+        addLog(`${cand.label}: ₹${cost}${mark}${savedNote}`);
+        // Sirf wahi photo "best" ban sakti hai jo Meesho par sach me lagi.
+        if (landed && cost < best.cost) best = { cost, file: cand.file, spec: cand.spec || null, label: cand.label, ai: !!cand.ai };
+        if (cand.plan && !cand.ai && cost < bestPlanCost) { bestPlanCost = cost; bestPlan = cand.plan; }
+        if (cost < baseline && landed) results.push({ cost, file: cand.file, spec: cand.spec || null, label: cand.label, ai: !!cand.ai, plan: cand.plan || null });
         if (cost === baseline) sameAsOriginal++;
       }
-      if (i === 4 && sameAsOriginal === 5) { stuck = true; break; }
-      if (i === 2 && notUploaded === 3) throw new Error("Image upload nahi ho rahi (preview nahi badla). Setup me 'Upload: drag-drop' try karo ya 'Pick hero upload box' karo.");
-      if (i === 2 && notSaved === 3) throw new Error("Image upload to hui par Front Image save nahi hui. Popup me jo button dabana padta hai (jaise Save/Crop), use Setup me '+ Upload ke baad click step' se pick karo, phir dobara chalao.");
-      if (i === 2 && readFails === 3) throw new Error("Shipping ₹ padh nahi pa rahe. Setup me 'Pick shipping ₹' karo.");
-      if (cfg.target && best.cost <= cfg.target) { addLog(`Target ₹${cfg.target} mil gaya, ruk gaye.`); break; }
+      if (count >= 5 && sameAsOriginal >= 5) { stuck = true; stopSearch = true; return false; }
+      if (failsInARow >= 5) throw new Error(`5 photo lag hi nahi rahi. Setup me 'Upload: drag-drop' try karo ya 'Pick hero upload box' karo.${cfg.steps.length ? "" : " Agar Meesho me popup aata hai aur usme Save/Crop dabana padta hai to '+ Upload ke baad click step' se wo button pick karo."}`);
+      if (readFails >= 3) throw new Error("Shipping ₹ padh nahi pa rahe. Setup me 'Pick shipping ₹' karo.");
+      if (cfg.target && best.cost <= cfg.target) { addLog(`Target ₹${cfg.target} mil gaya, ruk gaye.`); stopSearch = true; return false; }
+      return true;
+    };
+
+    if (cfg.autoTune) {
+      // Har dobara chalane par thoda alag frame try ho, taaki wahi combo na repeate ho.
+      autoRun++;
+      const jitter = [0, 2, -2, 4, -4][(autoRun - 1) % 5] * 0.02;
+      const full = await createImageBitmap(original);
+      const trimmed = await trimmedVersion(full);
+      try {
+        // AI photos redraw the product itself (compact / neatly folded): the strongest lever, so they go first.
+        if (cfg.useAI) {
+          // AI photos sabse strong lever hain, par poora try budget kha jane nahi chahiye: isliye
+          // photo ki sankhya tries ke hisaab se.
+          const aiPhotoCount = Math.max(1, Math.min(3, Math.floor(total / 8)));
+          const aiPhotos = (await aiSources(original, Math.min(total, aiPhotoCount + 2), AUTO_PRESETS)).slice(0, aiPhotoCount);
+          for (const p of aiPhotos) {
+            if (stopRequested || stopSearch || count >= total) break;
+            const bmp = await createImageBitmap(p.file);
+            // The AI photo already carries the framing we want ("compact" = product chhota frame me): cropping it
+            // would throw that away, so only scale the whole photo on the canvas.
+            let keepGoing = true;
+            for (const fill of [0.98, 0.6 + jitter]) {
+              if (stopRequested || stopSearch || count >= total) { keepGoing = false; break; }
+              const plan = { ...AUTO_PLAN, view: "full", fill: Math.round(fill * 100) / 100, src: "ai" };
+              const file = await renderAuto(bmp, plan, `ai_auto_${count + 1}.jpg`);
+              triedKeys.add(planKey(plan));
+              const label = `AI: ${p.label}${fill < 0.9 ? " (aur chhota)" : ""}`;
+              if (!await testCandidate({ file, label, ai: true, plan })) { keepGoing = false; break; }
+            }
+            bmp.close();
+            if (!keepGoing) break;
+          }
+        }
+        const ladder = autoLadder().map((p) => (jitter
+          ? { ...p, fill: Math.min(0.99, Math.max(0.4, Math.round((p.fill + jitter) * 100) / 100)) }
+          : p));
+        for (const plan of ladder) {
+          if (stopRequested || stopSearch || count >= total) break;
+          const bmp = plan.view === "trim" ? trimmed : full;
+          const file = await renderAuto(bmp, plan, `auto_${count + 1}.jpg`);
+          triedKeys.add(planKey(plan));
+          if (!await testCandidate({ file, label: planLabel(plan), plan })) break;
+        }
+        // Whatever won, try small changes around it: that is where the real saving shows up.
+        if (bestPlan && count < total && !stopRequested && !stopSearch) {
+          const axes = axisSensitivity(ladder, results);
+          addLog(`Sabse zyada asar kis cheez ka pada: ${axes.slice(0, 3).map((a) => a.axis).join(", ")}`);
+          for (const plan of mutationPlans(bestPlan, axes, triedKeys, total - count)) {
+            if (stopRequested || stopSearch || count >= total) break;
+            const bmp = plan.view === "trim" ? trimmed : full;
+            const file = await renderAuto(bmp, plan, `auto_${count + 1}.jpg`);
+            triedKeys.add(planKey(plan));
+            if (!await testCandidate({ file, label: planLabel(plan), plan })) break;
+          }
+        }
+      } finally {
+        full.close();
+        if (trimmed !== full) trimmed.close();
+      }
+    } else {
+      const aiPhotos = cfg.useAI ? (await aiSources(original, total)).slice(0, total) : [];
+      const bitmaps = [await createImageBitmap(original)];
+      for (const p of aiPhotos) bitmaps.push(await createImageBitmap(p.file));
+      const seed = previewSeed ?? Math.floor(Math.random() * 1e6);
+      previewSeed = null;
+      for (let i = 0; i < total && !stopRequested; i++) {
+        // AI photos can redraw the product (texture/size) or garble text, so they are only applied
+        // after the user has seen them; everything else is built from the untouched original.
+        let file, spec = null, label, ai = true;
+        if (i < aiPhotos.length) {
+          ({ file, label } = aiPhotos[i]);
+        } else {
+          const k = i - aiPhotos.length;
+          const src = k % bitmaps.length;
+          ai = src !== 0;
+          spec = variantSpec(k, seed, cfg.stickers, cfg.look);
+          label = `#${k + 1} ${ai ? `AI photo ${src} + ` : ""}${specLabel(spec)}`;
+          file = await renderVariant(bitmaps[src], spec, `hero_${k + 1}.jpg`);
+        }
+        if (!await testCandidate({ file, label, spec, ai })) break;
+      }
+      bitmaps.forEach((b) => b.close());
     }
-    bitmaps.forEach((b) => b.close());
 
     // Meesho's number for the same image is not always repeatable: re-upload the cheapest few and keep
     // the one that is cheapest on the second reading too.
     const wasStopped = stopRequested;
     stopRequested = false;
-    const candidates = results.filter((r) => !r.ai).sort((a, b) => a.cost - b.cost).slice(0, wasStopped ? 1 : CONFIRM_TOP);
+    const candidates = results.slice().sort((a, b) => a.cost - b.cost).slice(0, wasStopped ? 1 : CONFIRM_TOP);
     let confirmed = null;
     for (const [n, c] of candidates.entries()) {
       setStatus(`Confirm kar rahe hain ${n + 1}/${candidates.length}: ${c.label} (pehle ₹${c.cost})...`);
@@ -1103,6 +1405,19 @@
       addLog(`Confirm: ${c.label}: pehle ₹${c.cost}, ab ₹${cost ?? "?"}`);
       if (cost !== null) c.confirmed = cost;
       if (cost !== null && cost < baseline && (!confirmed || cost < confirmed.cost)) confirmed = { ...c, cost };
+    }
+    // An AI photo can change the product's texture/size, so it is only used when the seller agrees.
+    let declinedAi = false;
+    if (confirmed?.ai && !window.confirm("Sabse sasti photo AI ki banai hai (product ka texture/size ya text badla ho sakta hai). Photo badi karke check kar li? Lagayein?")) {
+      const alt = candidates.filter((c) => !c.ai).sort((a, b) => (a.confirmed ?? a.cost) - (b.confirmed ?? b.cost))[0] || null;
+      if (alt) {
+        confirmed = { ...alt, cost: alt.confirmed ?? alt.cost };
+        addLog("AI photo nahi lagayi, asli photo wali best photo chal rahi hai.");
+      } else {
+        confirmed = null;
+        declinedAi = true;
+        addLog("AI photo nahi lagayi (aapne mana kiya) aur koi asli photo wali sasti photo nahi mili.");
+      }
     }
     best = confirmed || { cost: baseline, file: original, spec: null, label: "Original" };
     const improved = best.file !== original;
@@ -1117,22 +1432,29 @@
     winner = improved ? best : null;
     const shown = results.slice().sort((a, b) => (a.confirmed ?? a.cost) - (b.confirmed ?? b.cost)).slice(0, MAX_CHOICES);
     renderChoices(shown, improved ? best.file : null, baseline);
+    const target = cfg.target || 0;
+    const targetNote = target ? (best.cost <= target
+      ? ` Target ₹${target} mil gaya ✓`
+      : ` Target ₹${target} tak nahi pahuncha (₹${best.cost - target} zyada).`) : "";
     if (improved) {
       const saved = baseline - best.cost;
       showResult(saved > 0
-        ? `Pehle ₹${baseline} → Ab ₹${best.cost}  (₹${saved} bacha, confirm kiya)`
-        : `Laga di ${best.label}, par aakhri reading ₹${best.cost} aayi (original ₹${baseline}).`);
+        ? `Pehle ₹${baseline} → Ab ₹${best.cost}  (₹${saved} bacha, confirm kiya).${targetNote}`
+        : `Laga di ${best.label}, par aakhri reading ₹${best.cost} aayi (original ₹${baseline}).${targetNote}`);
       btnDownload.classList.remove("hidden");
       setStatus(saved > 0
-        ? `Laga di: ${best.label}. Ab form check karke khud Submit karo.`
+        ? `Laga di: ${best.label}.${target && best.cost > target ? ` ₹${target} chahiye to 'Kitni try' badha ke dobara chalao.` : ""} Ab form check karke khud Submit karo.`
         : "Meesho ka shipping number har baar alag aa raha hai. Dobara chalao ya 'Sasti image download karo' se image rakh lo.", saved <= 0);
     } else {
-      if (stuck) {
+      if (declinedAi) {
+        showResult(`AI photo sabse sasti thi, par aapne mana kar diya - isliye original (₹${baseline}) chalu hai.`);
+        setStatus("AI photo dekh kar 'Ye lagao' dabayein - wahi sabse sasti thi.", true);
+      } else if (stuck) {
         showResult(`5 alag images par bhi shipping ₹${baseline} hi raha, isliye ruk gaye.`);
         setStatus("Lagta hai Meesho shipping dobara calculate nahi kar raha. Setup kholo: 'Price box: mil gaya' dikhna chahiye (nahi to 'Pick price box' karo). Phir bhi same aaye to 'Page report copy karo' dabake report bhejo.", true);
       } else {
         showResult(`Original hi sabse sasta hai: ₹${baseline}`);
-        setStatus(wasStopped ? "Roka gaya. Original wapas laga di." : "Dobara chalao (har baar naye colours try hote hain) ya 'Kitni try' badhao.");
+        setStatus(wasStopped ? "Roka gaya. Original wapas lagi." : "Dobara chalao (har baar thoda alag size/frame try hota hai) ya 'Kitni try' badhao.");
       }
     }
   }
@@ -1367,7 +1689,7 @@
       ...[...document.querySelectorAll("body *")].filter((n) => !host.contains(n) && n.children.length === 0 && n.textContent.includes("₹"))
         .slice(0, 25).map((n) => ` - "${short(n.parentElement?.parentElement?.textContent, 90)}"`),
       `dialogs: ${[...document.querySelectorAll(DIALOG_SEL)].filter(visible).map((d) => short(d.textContent, 60)).join(" || ") || "none"}`,
-      `cfg: steps=${cfg.steps.length} method=${cfg.uploadMethod} picked=${[cfg.heroSelector, cfg.otherSelector, cfg.costSelector, cfg.priceSelector].map(Boolean)} refreshPrice=${cfg.refreshPrice} ai=${cfg.useAI}`,
+      `cfg: steps=${cfg.steps.length} method=${cfg.uploadMethod} picked=${[cfg.heroSelector, cfg.otherSelector, cfg.costSelector, cfg.priceSelector].map(Boolean)} refreshPrice=${cfg.refreshPrice} ai=${cfg.useAI} autoTune=${cfg.autoTune} target=${cfg.target} tries=${cfg.tries}`,
       `priceInput: ${findPriceInput() ? cssPath(findPriceInput()) : "none"} frontSrc: ${short(frontSrc(), 60)}`,
       `buttons in dialogs: ${[...document.querySelectorAll(DIALOG_SEL)].filter(visible).flatMap((d) => [...d.querySelectorAll("button, [role=button]")]).map((b) => short(ownText(b), 25)).join(" | ") || "none"}`,
       "log:", ...[...log.children].slice(0, 15).map((li) => ` - ${li.textContent}`),
@@ -1461,15 +1783,28 @@
     refreshDetect();
     setStatus("Auto-detect par wapas.");
   });
-  [triesInput, targetInput, stickersBox, lookSelect, extrasModeSelect, fourthSelect, sameFrameBox, aiBox, refreshPriceBox, waitInput, stepWaitInput, methodSelect]
+  [triesInput, targetInput, stickersBox, autoBox, lookSelect, extrasModeSelect, fourthSelect, sameFrameBox, aiBox, refreshPriceBox, waitInput, stepWaitInput, methodSelect]
     .forEach((n) => n.addEventListener("change", saveCfg));
 
+  // Auto-tune chalu ho to "Look" ka use nahi hota (wahi frame wala look khud banata hai).
+  const syncAutoUi = () => { lookSelect.disabled = autoBox.checked; lookSelect.style.opacity = autoBox.checked ? ".5" : "1"; };
+  autoBox.addEventListener("change", syncAutoUi);
+  syncAutoUi();
+
   chrome.storage.local.get("shipOptimizerCfg").then(({ shipOptimizerCfg }) => {
-    Object.assign(cfg, shipOptimizerCfg || {});
+    const stored = shipOptimizerCfg || {};
+    Object.assign(cfg, stored);
     if (!Array.isArray(cfg.steps)) cfg.steps = [];
     triesInput.value = cfg.tries;
+    // Target 0 = "band". Purane config ka default bhi 0 tha, isliye nayi value (40) tabhi aati hai
+    // jab user ne khud 0 set na kiya ho (targetVersion 2 = naya config).
+    const storedTarget = Number(stored.target);
+    cfg.target = stored.targetVersion === 2
+      ? (Number.isFinite(storedTarget) ? storedTarget : 40)
+      : (storedTarget || 40);
     targetInput.value = cfg.target;
     stickersBox.checked = cfg.stickers;
+    autoBox.checked = cfg.autoTune !== false;
     lookSelect.value = cfg.look === "variety" ? "variety" : "nice";
     extrasModeSelect.value = cfg.extrasMode === "asis" ? "asis" : "make";
     fourthSelect.value = cfg.fourth === "daily" ? "daily" : "size";
@@ -1480,6 +1815,7 @@
     stepWaitInput.value = cfg.stepWaitSec;
     methodSelect.value = cfg.uploadMethod;
     renderSteps();
+    syncAutoUi();
     refreshDetect();
   });
   setInterval(() => { if (!running) refreshDetect(); }, 3000);

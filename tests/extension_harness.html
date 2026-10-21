@@ -58,8 +58,13 @@
       document.getElementById(id).addEventListener("input", (e) => {
         const f = window.__front;
         if (!f || !e.target.value) return;
+        (window.__priceEvents ||= []).push(`${id}:${f.name}@${Date.now() - window.__t0}`);
         setTimeout(() => {
-          const cost = 40 + (f.size % 60);
+          // ?hit=1: the first photo costs exactly 40 so the "target reached" path gets tested.
+          const hit = new URLSearchParams(location.search).has("hit") && !window.__hitDone;
+          if (hit) window.__hitDone = true;
+          const cost = hit ? 40 : 40 + (f.size % 60);
+          (window.__costs ||= []).push(`${f.name}:${cost}${hit ? "(hit)" : ""}`);
           document.getElementById("ship-val").textContent = `₹${cost}`;
           window.__lastApplied = `${f.name} ${cost}`;
         }, 1000);
@@ -77,6 +82,9 @@
     // Headless has nobody to answer "AI photo lagayein?" dialogs: count them and say yes.
     window.__confirms = 0;
     window.confirm = () => { window.__confirms++; return true; };
+    window.__errors = [];
+    window.addEventListener("error", (e) => window.__errors.push(`err: ${e.message || e.error}`));
+    window.addEventListener("unhandledrejection", (e) => window.__errors.push(`rej: ${e.reason?.message || e.reason}`));
     const attach = Element.prototype.attachShadow;
     Element.prototype.attachShadow = function (opts) { return attach.call(this, { ...opts, mode: "open" }); };
     window.chrome = {
@@ -92,7 +100,10 @@
         } },
       storage: { local: {
         async get() {
-          return { shipOptimizerCfg: { tries: 5, target: 0, stickers: true, sameFrame: true, waitSec: 3, stepWaitSec: 1,
+          // ?target=45&tv=1 lets the test check how the target field is restored.
+          const q = new URLSearchParams(location.search);
+          const target = q.has("target") ? Number(q.get("target")) : 0;
+          return { shipOptimizerCfg: { tries: 5, target, targetVersion: q.has("tv") ? 2 : undefined, stickers: true, sameFrame: true, waitSec: 3, stepWaitSec: 1,
             uploadMethod: "input", steps: [], useAI: true, refreshPrice: true } };
         },
         async set() {},
@@ -104,18 +115,38 @@
     const panel = () => [...document.documentElement.children].find((e) => e.shadowRoot)?.shadowRoot;
     const button = (text) => [...panel().querySelectorAll("button")].find((b) => b.textContent.startsWith(text));
     const statusText = () => panel().querySelector(".body > div:not(.card):not(.row):not(.muted):not(.result)")?.textContent || "";
-    const waitFor = async (re) => { while (!re.test(statusText())) await new Promise((r) => setTimeout(r, 500)); };
+    const waitFor = async (re) => {
+      while (!(typeof re === "function" ? re(statusText()) : re.test(statusText()))) await new Promise((r) => setTimeout(r, 500));
+    };
     const progressTimer = setInterval(() => {
-      if (!document.title.startsWith("DONE")) document.title = `RUN ${statusText()} | ${panel()?.querySelector("ol")?.textContent.slice(0, 300)}`;
+      if (!document.title.startsWith("DONE")) document.title = `RUN ${statusText()} | err=${window.__errors.join(" ; ")} | ${panel()?.querySelector("ol")?.textContent.slice(0, 300)}`;
     }, 1000);
     (async () => {
+      window.__t0 = Date.now();
       await new Promise((r) => setTimeout(r, 2000));
       if (new URLSearchParams(location.search).has("preview")) {
         // ?preview=1: only render the look preview (take a screenshot to judge the styles).
         clearInterval(progressTimer);
         button("Pehle look").click();
         await waitFor(/pehli 6 photos|nahi mili/);
-        document.title = `DONE preview cards=${panel().querySelectorAll(".choice").length}`;
+        // Measure every preview: how much of the frame the product covers (the shipping lever).
+        const stats = [];
+        for (const img of panel().querySelectorAll(".choice img")) {
+          const c = document.createElement("canvas");
+          c.width = 200; c.height = 200;
+          const x = c.getContext("2d");
+          x.drawImage(img, 0, 0, 200, 200);
+          const d = x.getImageData(0, 0, 200, 200).data;
+          let n = 0, minX = 200, maxX = -1, minY = 200, maxY = -1;
+          for (let y = 0; y < 200; y++) for (let px = 0; px < 200; px++) {
+            const i = (y * 200 + px) * 4;
+            if (Math.abs(d[i] - 255) + Math.abs(d[i + 1] - 255) + Math.abs(d[i + 2] - 255) > 40) {
+              n++; if (px < minX) minX = px; if (px > maxX) maxX = px; if (y < minY) minY = y; if (y > maxY) maxY = y;
+            }
+          }
+          stats.push(`${img.title}: cover=${(n / 40000 * 100).toFixed(0)}% box=${maxX < 0 ? "-" : ((maxX - minX) / 200 * 100).toFixed(0) + "%x" + ((maxY - minY) / 200 * 100).toFixed(0) + "%"}`);
+        }
+        document.title = `DONE preview cards=${panel().querySelectorAll(".choice").length} | ${stats.join(" | ")}`;
         const sheet = document.createElement("div");
         sheet.id = "sheet";
         sheet.style.cssText = "position:absolute;left:0;top:0;width:520px;display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#fff";
@@ -124,15 +155,16 @@
         return;
       }
       button("1.").click();
-      await waitFor(/Laga di|Dobara|NAHI|nahi|Roka/);
+      await waitFor(/Ab form check|Dobara|Roka|Lagta hai|nahi mili|NAHI/);
       const auto = panel().querySelector(".result").textContent;
       const cards = [...panel().querySelectorAll(".choice")];
       let picked = "no choices";
       if (cards.length > 1) {
         const want = cards[1].querySelector("img").title;
+        const beforeApply = statusText();
         [...cards[1].querySelectorAll("button")].find((b) => b.textContent === "Ye lagao").click();
-        await new Promise((r) => setTimeout(r, 1000));
-        await waitFor(/Laga di/);
+        // Wait for the apply to really finish: the panel is busy until the status changes and says so.
+        await waitFor((s) => s !== beforeApply && /Ab form check/.test(s));
         picked = `cards=${cards.length} picked="${want}" applied=${window.__lastApplied} on=${panel().querySelectorAll(".choice.on").length}`;
       }
       const hero = `${auto} || ${picked}`;
@@ -150,7 +182,7 @@
       button("Page report").click();
       await new Promise((r) => setTimeout(r, 500));
       clearInterval(progressTimer);
-      document.title = `DONE hero=${hero} [${window.__lastApplied}] | extras=${window.__extras} | confirms=${window.__confirms} | others=${window.__others.join(",")} | getFile touched=${!!window.__touchedGetFile} | ${statusText()}`;
+      document.title = `DONE hero=${hero} [${window.__lastApplied}] | extras=${window.__extras} | confirms=${window.__confirms} | others=${window.__others.join(",")} | getFile touched=${!!window.__touchedGetFile} | target=${panel().querySelector("#opt-target")?.value} tries=${panel().querySelector("#opt-tries")?.value} | costs=${(window.__costs || []).slice(0, 8).join(",")} | events=${(window.__priceEvents || []).slice(0, 8).join(",")} | errors=${window.__errors.join(" ; ")} | secs=${Math.round((Date.now() - window.__t0) / 1000)} | ${statusText()}`;
       const pre = document.createElement("pre");
       pre.id = "report";
       pre.textContent = panel().querySelector("textarea").value;

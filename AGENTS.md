@@ -72,6 +72,22 @@ Real run: the charge does change per image (₹267–₹4998 for the same produc
 loop the top 3 cheaper images are re-uploaded and the cheapest confirmed reading wins.
 After a run, `renderChoices` shows up to 6 cheapest images (thumbnail, ₹, confirm mark, click =
 zoom) with "Ye lagao" (re-uploads that image and reads the charge) and "Download" per card.
+Auto-tune (default ON, `cfg.autoTune`): the hero flow stops guessing and measures instead. It
+crops the photo to the product (`trimBox`/`trimmedVersion`, plain background only), then tests one
+photo per lever and keeps whatever Meesho charges least: product fill 0.98/0.85/0.7/0.55, full
+photo vs cut, white/pastel/card background, canvas 800/1000/1100 px with JPEG q0.65-0.9, aspect
+1:1 / 4:5 / 3:4 (`autoLadder`, 12 plans). AI photos go first (presets ordered compact, podium,
+top-view, clean-white, ...; the AI framing is kept as it is, never cropped, plus one "aur chhota"
+variant at fill 0.6, because a small product in the frame is the strongest lever). Whatever wins,
+the rest of the tries go to neighbouring plans along the most sensitive axis
+(`axisSensitivity`/`mutationPlans`). Target `cfg.target` (panel default 40, typing 0 turns it off)
+stops the search as soon as a photo reads at or below it, and the result line says whether the
+target was reached. `cfg.targetVersion` (2 = new config) separates "user turned the target off"
+(0 stays 0) from the old default (0 = not set -> 40). Every run in the same tab shifts the fill a
+little (`autoRun` + `jitter`), so a second run does not repeat the same photos.
+A photo Meesho rejects (under 800 px, odd shape) is skipped, not fatal: only 5 failed uploads in a
+row abort the run. AI winners are only applied after a `window.confirm` QC gate (fallback = best
+non-AI photo).
 Looks (`cfg.look`): "nice" (default; user wants the hero to look attractive) = square 1100 px,
 8 styles (pastel-card, thin-frame, gradient-card, corner-accents, accent-card, double-line,
 dots-card, band) x 9 soft palettes, rounded white card + soft shadow, optional pill badge
@@ -84,8 +100,11 @@ Selectors auto-detect; Setup has pickers (hero box, other box, shipping ₹, pos
 stored in chrome.storage (`shipOptimizerCfg`).
 Never tested against the real panel (needs login). `tests/extension_harness.html` is a fake panel:
 copy it plus `extension/content.js` into a temp dir, `python -m http.server`, then run headless Edge
-with `--dump-dom --virtual-time-budget=400000` on `/extension_harness.html` (and `?method=drop`);
-the title shows `DONE hero=... | others=...`.
+with `--dump-dom --virtual-time-budget=900000` on `/extension_harness.html` (and `?method=drop`);
+the title shows `DONE hero=... | others=...` (plus `secs=`, `confirms=`, `errors=`, `costs=`). The
+fake panel answers `window.confirm` with yes and prints page errors into the title. Query switches:
+`?preview=1` (look preview + product-cover % per card), `?target=45&tv=1` (stored target),
+`?hit=1` (the first photo costs exactly 40, to test the "target reached" path).
 
 ## Verify
 ```
