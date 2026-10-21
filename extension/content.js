@@ -5,6 +5,7 @@
   const POLL_MS = 500;
   const STABLE_MS = 3000;
   const MIN_READ_WAIT_MS = 8000;
+  const POST_REFRESH_WAIT_MS = 4000;  // extra settle time after refreshPrice before reading cost
   const CONFIRM_TOP = 3;
   const MAX_CHOICES = 6;
   const MAX_WAIT_MS = 45000;
@@ -162,21 +163,29 @@
     return imageInputs().filter((i) => i !== hero && !tile?.contains(i));
   }
 
-  const CONFIRM_RE = /\b(save|done|apply|crop|confirm|ok|okay|upload|update|replace|use|continue|proceed|next|add)\b/i;
-  const DANGER_RE = /submit|cancel|delete|remove|discard|back|close|reset|skip|exit/i;
+  const CONFIRM_RE = /\b(save|done|apply|crop|confirm|ok|okay|upload|update|replace|use|continue|proceed|next|add|ho\s*gaya|theek|lagao|haan|yes|complete|finish|submit photo|upload photo)\b/i;
+  const DANGER_RE = /submit(?!\s*photo)|cancel|delete|remove|discard|back|close|reset|skip|exit/i;
   const isConfirm = (b) => { const t = ownText(b); return t.length <= 30 && CONFIRM_RE.test(t) && !DANGER_RE.test(t); };
-  const DIALOG_SEL = "[role=dialog], [aria-modal=true], [class*=modal i], [class*=dialog i], [class*=popup i], [class*=drawer i]";
+  const DIALOG_SEL = "[role=dialog], [aria-modal=true], [class*=modal i], [class*=dialog i], [class*=popup i], [class*=drawer i], [class*=sheet i], [class*=overlay i]";
 
   // After an upload Meesho may open a crop/preview popup. Press its Save/Done (never "Submit").
+  // Poll up to ~6 s — the dialog may appear with a delay after file input is set.
   async function autoConfirm() {
-    for (let round = 0; round < 3; round++) {
+    let pressed = 0;
+    for (let round = 0; round < 5; round++) {
       await sleep(1200);
-      const btn = [...document.querySelectorAll(DIALOG_SEL)].filter((d) => visible(d) && !host.contains(d))
+      const dialogs = [...document.querySelectorAll(DIALOG_SEL)].filter((d) => visible(d) && !host.contains(d));
+      if (!dialogs.length) {
+        if (pressed > 0) return;  // we already pressed something, popup closed — done
+        continue;                 // popup not opened yet, keep waiting
+      }
+      const btn = dialogs
         .flatMap((d) => [...d.querySelectorAll("button, [role=button]")])
         .find((b) => visible(b) && !b.disabled && isConfirm(b));
-      if (!btn) return;
+      if (!btn) continue;        // dialog open but no confirm button yet (loading state)
       addLog(`Popup me "${ownText(btn)}" dabaya`);
       btn.click();
+      pressed++;
     }
   }
 
@@ -236,7 +245,7 @@
   const COLORS = ["#ffffff", "#000000", "#e53935", "#fdd835", "#1e88e5", "#43a047", "#ec407a", "#fb8c00",
     "#8e24aa", "#9e9e9e", "#6d4c41", "#1a237e", "#00acc1", "#f5f5dc", "#ff80ab", "#004d40"];
   const PATTERNS = ["solid", "double", "stripes", "dots", "checker", "gradient", "dashed"];
-  const WIDTHS = [0.03, 0.06, 0.1, 0.15];
+  const WIDTHS = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40];
   const STICKERS = ["NEW", "BEST", "HOT", "★", "❤", "TOP"];
   const CORNERS = ["tr", "tl", "br", "bl"];
 
@@ -263,20 +272,58 @@
     { name: "teal", bg: "#ccfbf1", accent: "#0f766e" },
     { name: "pink", bg: "#fce7f3", accent: "#9f2089" },
   ];
-  const NICE_STYLES = ["pastel-card", "thin-frame", "gradient-card", "corner-accents", "accent-card", "double-line", "dots-card", "band"];
-  const NICE_PADS = [0.05, 0.07, 0.09];
-  const NICE_SCALES = [0.9, 0.95, 1];
+  const NICE_STYLES = ["b1g1", "pastel-card", "thin-frame", "gradient-card", "corner-accents", "accent-card", "double-line", "dots-card", "band"];
+  const NICE_PADS = [0.10, 0.15, 0.20, 0.25];
+  // Scales: product should fill most of the card — never use tiny values like 0.20/0.30
+  const NICE_SCALES = [0.72, 0.78, 0.84, 0.88, 0.92, 0.96];
   const NICE_STICKERS = ["BESTSELLER", "NEW", "PREMIUM", "TRENDING"];
   const NICE_SIDE = 1100;
+
+  // ---- Product context: title + description se smart layouts ----
+  let productCtx = { quantity: 1, isB1G1: false, title: "", features: [] };
+
+  function parseProductContext(title, desc) {
+    const text = (title + " " + desc).toLowerCase();
+    const b1g1  = /buy\s*(\d+)\s*get\s*(\d+)/i.exec(text);
+    const packN  = (/pack\s*of\s*(\d+)/i.exec(text) || /set\s*of\s*(\d+)/i.exec(text) || /combo\s*of\s*(\d+)/i.exec(text));
+    const pcs    = /(\d+)\s*(?:pc|pcs|piece|pieces|nos)\b/i.exec(text);
+    let quantity = 1;
+    let isB1G1   = false;
+    if (b1g1)       { quantity = Math.min(4, Number(b1g1[1]) + Number(b1g1[2])); isB1G1 = true; }
+    else if (packN) { quantity = Math.min(4, Number(packN[1])); }
+    else if (pcs)   { quantity = Math.min(4, Number(pcs[1])); }
+    const features = desc
+      ? desc.split(/[.\n,;]/).map((s) => s.trim()).filter((s) => s.length > 4 && s.length < 60).slice(0, 5)
+      : [];
+    productCtx = { quantity, isB1G1, title: title.trim(), features };
+    // update UI hint (ctxInfo declared later in UI section — closure is safe)
+    const parts = [];
+    if (isB1G1)            parts.push(`Buy 1 Get 1 Free → 2 products dikhaega`);
+    else if (quantity > 1) parts.push(`Pack of ${quantity} → ${quantity} products dikhaega`);
+    if (features.length)   parts.push(`${features.length} features mili`);
+    if (typeof ctxInfo !== "undefined")
+      ctxInfo.textContent = parts.length ? "Samjha: " + parts.join(" | ") : "Koi khaas pattern nahi mila (normal frames try honge).";
+  }
+
+  // Returns ordered style list based on current productCtx.
+  function contextStyles() {
+    const base = [];
+    if (productCtx.isB1G1)        base.push("b1g1");
+    if (productCtx.quantity >= 2) base.push("multi-pack");
+    if (productCtx.title)         base.push("feature-card");
+    for (const s of NICE_STYLES) { if (!base.includes(s)) base.push(s); }
+    return base;
+  }
 
   function variantSpec(i, seed, withStickers, look = "nice") {
     const r = rng(seed * 1000 + i);
     const pick = (arr) => arr[Math.floor(r() * arr.length)];
     if (look === "nice") {
+      const styles = contextStyles();
       return {
         mode: "nice",
-        style: NICE_STYLES[i % NICE_STYLES.length],
-        palette: PALETTES[(Math.floor(i / NICE_STYLES.length) * 4 + Math.floor(r() * PALETTES.length)) % PALETTES.length],
+        style: styles[i % styles.length],
+        palette: PALETTES[(Math.floor(i / styles.length) * 4 + Math.floor(r() * PALETTES.length)) % PALETTES.length],
         pad: pick(NICE_PADS),
         scale: pick(NICE_SCALES),
         sticker: withStickers && i % 4 === 3 ? pick(NICE_STICKERS) : null,
@@ -297,7 +344,12 @@
   }
 
   function specLabel(s) {
-    if (s.mode === "nice") return `${s.style} ${s.palette.name}${s.sticker ? ` + "${s.sticker}"` : ""}`;
+    if (s.mode === "nice") {
+      if (s.style === "b1g1")          return `Buy 1 Get 1 Free (${s.palette.name})`;
+      if (s.style === "multi-pack")    return `Pack of ${productCtx.quantity || 2} grid`;
+      if (s.style === "feature-card")  return `Feature card layout`;
+      return `${s.style} ${s.palette.name}${s.sticker ? ` + "${s.sticker}"` : ""}`;
+    }
     return `${s.pattern} border ${Math.round(s.width * 100)}%${s.sticker ? ` + "${s.sticker}"` : ""}`;
   }
 
@@ -401,6 +453,9 @@
   }
 
   function renderNice(bitmap, spec, name) {
+    if (spec.style === "b1g1")         return renderB1G1(bitmap, spec, name);
+    if (spec.style === "multi-pack")   return renderMultiPack(bitmap, spec, name);
+    if (spec.style === "feature-card") return renderFeatureCard(bitmap, spec, name);
     const S = NICE_SIDE;
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = S;
@@ -419,6 +474,264 @@
     ctx.drawImage(bitmap, card.x + (card.w - dw) / 2, card.y + (card.h - dh) / 2, dw, dh);
     ctx.restore();
     if (spec.sticker) paintNiceSticker(ctx, S, spec);
+    return toJpeg(canvas, name);
+  }
+
+  // ---- Buy 1 Get 1 Free promotional canvas (no AI needed) ----
+  function renderB1G1(bitmap, spec, name) {
+    const S = NICE_SIDE; // 1100
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = S;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+
+    // White background
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, S, S);
+
+    // ── Top red banner ──────────────────────────────────
+    const bannerH = Math.round(S * 0.22);
+    const grad = ctx.createLinearGradient(0, 0, S, 0);
+    grad.addColorStop(0, "#b71c1c");
+    grad.addColorStop(0.5, "#e53935");
+    grad.addColorStop(1, "#b71c1c");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, S, bannerH);
+
+    // Decorative yellow triangles on banner
+    ctx.fillStyle = "#fdd835";
+    for (const [bx, flip] of [[S * 0.05, 1], [S * 0.13, -1], [S * 0.87, 1], [S * 0.95, -1]]) {
+      const ts = S * 0.06;
+      ctx.beginPath();
+      ctx.moveTo(bx, 4);
+      ctx.lineTo(bx + ts * flip, 4);
+      ctx.lineTo(bx + (ts / 2) * flip, ts * 0.9);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Banner text
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `900 ${Math.round(S * 0.080)}px 'Arial Black', Arial, sans-serif`;
+    ctx.fillText("BUY 1", S / 2, Math.round(bannerH * 0.31));
+    ctx.fillStyle = "#fdd835";
+    ctx.font = `900 ${Math.round(S * 0.098)}px 'Arial Black', Arial, sans-serif`;
+    ctx.fillText("GET 1 FREE", S / 2, Math.round(bannerH * 0.73));
+
+    // ── Product images ───────────────────────────────────
+    const prodTop = bannerH + Math.round(S * 0.025);
+    const labelH  = Math.round(S * 0.11);
+    const labelTop = S - labelH;
+    const prodAreaH = labelTop - prodTop - Math.round(S * 0.02);
+    const halfW = Math.round(S / 2);
+    const padX  = Math.round(S * 0.04);
+
+    const maxPW = halfW - padX * 2 - Math.round(S * 0.025); // leave room for "+" circle
+    const fit = Math.min(maxPW / bitmap.width, prodAreaH / bitmap.height) * 0.90;
+    const dw = Math.round(bitmap.width * fit);
+    const dh = Math.round(bitmap.height * fit);
+
+    const lx = padX + Math.round((maxPW - dw) / 2);
+    const imgY = prodTop + Math.round((prodAreaH - dh) / 2);
+    // Left product (BUY)
+    ctx.drawImage(bitmap, lx, imgY, dw, dh);
+    // Right product (FREE)
+    const rx = halfW + padX + Math.round((maxPW - dw) / 2) + Math.round(S * 0.025);
+    ctx.drawImage(bitmap, rx, imgY, dw, dh);
+
+    // ── "+" circle in centre ─────────────────────────────
+    const plusR  = Math.round(S * 0.046);
+    const plusCX = halfW;
+    const plusCY = prodTop + Math.round(prodAreaH / 2);
+    ctx.fillStyle = "#e53935";
+    ctx.beginPath();
+    ctx.arc(plusCX, plusCY, plusR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold ${Math.round(S * 0.058)}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("+", plusCX, plusCY + 2);
+
+    // ── Labels ───────────────────────────────────────────
+    const lbW = Math.round(halfW * 0.68);
+    const lbH = Math.round(labelH * 0.70);
+    const lbR = Math.round(lbH / 2);
+    const lbY = labelTop + Math.round((labelH - lbH) / 2);
+    const fontSize = Math.round(S * 0.038);
+
+    // Left: "1 PC (BUY)"
+    const lb1X = Math.round(halfW / 2 - lbW / 2);
+    ctx.fillStyle = "#e53935";
+    roundRect(ctx, lb1X, lbY, lbW, lbH, lbR);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("1 PC (BUY)", halfW / 2, lbY + lbH / 2);
+
+    // Right: "1 PC (FREE)"
+    const lb2X = halfW + Math.round(halfW / 2 - lbW / 2);
+    ctx.fillStyle = "#c62828";
+    roundRect(ctx, lb2X, lbY, lbW, lbH, lbR);
+    ctx.fill();
+    ctx.fillStyle = "#fdd835";
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("1 PC (FREE)", halfW + halfW / 2, lbY + lbH / 2);
+
+    return toJpeg(canvas, name);
+  }
+
+  // ---- Pack of N layout (2/3/4 product copies in a grid) ----
+  function renderMultiPack(bitmap, spec, name) {
+    const S = NICE_SIDE;
+    const n = Math.min(4, productCtx.quantity || 2);
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = S;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    const { bg, accent } = spec.palette;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, S, S);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, S, Math.round(S * 0.06));
+    ctx.fillRect(0, Math.round(S * 0.94), S, Math.round(S * 0.06));
+    // "PACK OF N" badge
+    const bdgW = Math.round(S * 0.36), bdgH = Math.round(S * 0.075);
+    const bdgX = Math.round((S - bdgW) / 2), bdgY = Math.round(S * 0.01);
+    ctx.fillStyle = accent;
+    roundRect(ctx, bdgX, bdgY, bdgW, bdgH, bdgH / 2);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold ${Math.round(S * 0.038)}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`PACK OF ${n}`, bdgX + bdgW / 2, bdgY + bdgH / 2);
+    // helper to draw one product copy
+    const pad = Math.round(S * 0.04);
+    const topY = Math.round(S * 0.09);
+    const areaH = Math.round(S * 0.84);
+    function drawItem(ix, iy, iw, ih) {
+      const fit = Math.min(iw / bitmap.width, ih / bitmap.height) * 0.85;
+      const dw = bitmap.width * fit, dh = bitmap.height * fit;
+      ctx.drawImage(bitmap, ix + (iw - dw) / 2, iy + (ih - dh) / 2, dw, dh);
+    }
+    if (n === 2) {
+      const gap = Math.round(S * 0.03);
+      const iw  = Math.round((S - pad * 2 - gap) / 2);
+      drawItem(pad, topY, iw, areaH);
+      drawItem(pad + iw + gap, topY, iw, areaH);
+    } else if (n === 3) {
+      const topH = Math.round(areaH * 0.52);
+      const botH = areaH - topH - Math.round(S * 0.02);
+      const gap  = Math.round(S * 0.025);
+      const topW = Math.round(S * 0.52);
+      drawItem(Math.round((S - topW) / 2), topY, topW, topH);
+      const bw = Math.round((S - pad * 2 - gap) / 2);
+      drawItem(pad, topY + topH + Math.round(S * 0.02), bw, botH);
+      drawItem(pad + bw + gap, topY + topH + Math.round(S * 0.02), bw, botH);
+    } else {
+      const gap = Math.round(S * 0.025);
+      const cw  = Math.round((S - pad * 2 - gap) / 2);
+      const ch  = Math.round((areaH - gap) / 2);
+      for (let i = 0; i < Math.min(n, 4); i++) {
+        drawItem(pad + (i % 2) * (cw + gap), topY + Math.floor(i / 2) * (ch + gap), cw, ch);
+      }
+    }
+    // bottom title
+    if (productCtx.title) {
+      ctx.fillStyle = "#444444";
+      ctx.font = `${Math.round(S * 0.027)}px Arial, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(productCtx.title.slice(0, 55), S / 2, Math.round(S * 0.965));
+    }
+    return toJpeg(canvas, name);
+  }
+
+  // ---- Feature card layout (product left, title + bullets right) ----
+  function renderFeatureCard(bitmap, spec, name) {
+    const S = NICE_SIDE;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = S;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    const { bg, accent } = spec.palette;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, S, S);
+    // right info panel
+    const splitX  = Math.round(S * 0.56);
+    const panelPad = Math.round(S * 0.033);
+    ctx.fillStyle = bg;
+    roundRect(ctx, splitX, panelPad, S - splitX - panelPad, S - panelPad * 2, Math.round(S * 0.04));
+    ctx.fill();
+    // product image left
+    const imgW = splitX - panelPad * 2;
+    const imgH = S - panelPad * 2;
+    const fit  = Math.min(imgW / bitmap.width, imgH / bitmap.height) * 0.91;
+    const dw = bitmap.width * fit, dh = bitmap.height * fit;
+    ctx.drawImage(bitmap, panelPad + (imgW - dw) / 2, panelPad + (imgH - dh) / 2, dw, dh);
+    // right panel content
+    const rx = splitX + panelPad * 1.4;
+    const rw = S - splitX - panelPad * 3;
+    let cy = Math.round(S * 0.09);
+    // accent top bar
+    ctx.fillStyle = accent;
+    roundRect(ctx, rx - 4, cy - Math.round(S * 0.008), rw + 8, Math.round(S * 0.007), 4);
+    ctx.fill();
+    cy += Math.round(S * 0.038);
+    // title word-wrap
+    if (productCtx.title) {
+      ctx.fillStyle = accent;
+      ctx.font = `bold ${Math.round(S * 0.034)}px Arial, sans-serif`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      const words = productCtx.title.split(" ");
+      let line = "";
+      for (const w of words) {
+        const test = line ? line + " " + w : w;
+        if (ctx.measureText(test).width > rw && line) {
+          ctx.fillText(line, rx, cy); cy += Math.round(S * 0.043); line = w;
+        } else line = test;
+        if (cy > S * 0.38) break;
+      }
+      if (line) { ctx.fillText(line, rx, cy); cy += Math.round(S * 0.043); }
+      cy += Math.round(S * 0.025);
+    }
+    // divider
+    ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.35;
+    ctx.beginPath(); ctx.moveTo(rx, cy); ctx.lineTo(rx + rw, cy); ctx.stroke();
+    ctx.globalAlpha = 1; cy += Math.round(S * 0.038);
+    // feature bullets
+    const feats = productCtx.features.length > 0
+      ? productCtx.features
+      : ["Premium Quality", "Durable & Long Lasting", "Easy to Clean", "Multipurpose Use"];
+    for (const feat of feats.slice(0, 5)) {
+      if (cy > S * 0.83) break;
+      const bcy = cy + Math.round(S * 0.016);
+      ctx.fillStyle = accent;
+      ctx.beginPath(); ctx.arc(rx + Math.round(S * 0.019), bcy, Math.round(S * 0.016), 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#ffffff"; ctx.font = `bold ${Math.round(S * 0.018)}px Arial, sans-serif`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("✓", rx + Math.round(S * 0.019), bcy);
+      ctx.fillStyle = "#333333"; ctx.font = `${Math.round(S * 0.026)}px Arial, sans-serif`;
+      ctx.textAlign = "left"; ctx.textBaseline = "top";
+      const ftx = rx + Math.round(S * 0.044);
+      const ftw = rw - Math.round(S * 0.044);
+      let fl = "", fy = cy;
+      for (const fw of feat.split(" ")) {
+        const ft = fl ? fl + " " + fw : fw;
+        if (ctx.measureText(ft).width > ftw && fl) { ctx.fillText(fl, ftx, fy); fy += Math.round(S * 0.030); fl = fw; } else fl = ft;
+      }
+      if (fl) ctx.fillText(fl, ftx, fy);
+      cy = Math.max(fy + Math.round(S * 0.032), cy + Math.round(S * 0.052));
+      cy += Math.round(S * 0.008);
+    }
     return toJpeg(canvas, name);
   }
 
@@ -764,6 +1077,15 @@
 
   const tip = el("div", "Pehle Meesho form me category, weight aur price bhar do, aur front image laga do (taaki Shipping ₹ dikhe).", "muted");
 
+  // ---- Product context card ----
+  const productTitleInp = Object.assign(el("input", null, "ctx-inp"), { type: "text", placeholder: "e.g. Microfiber Towel Buy 1 Get 1 Free Orange Green" });
+  const productDescInp  = Object.assign(el("textarea", null, "ctx-inp"), { placeholder: "Features (optional): Soft, 300GSM, Machine Washable, Car/Kitchen use...", rows: 2 });
+  const ctxInfo = el("div", "Title/description se smart images banegi: pack/combo/B1G1 auto detect hoga.", "muted");
+  const ctxCard = card(
+    el("div", "📦 Product Title & Features (optional — smarter images banegi):", "muted"),
+    productTitleInp, productDescInp, ctxInfo,
+  );
+
   const btnHero = el("button", "1. Hero image ki shipping kam karo", "big");
   const heroFile = Object.assign(el("input"), { type: "file", accept: "image/jpeg,image/png,image/webp" });
   const triesInput = numInput(5, 120);
@@ -846,7 +1168,7 @@
   ));
 
   body.append(
-    tip,
+    tip, ctxCard,
     card(btnHero,
       el("div", "Page ki front image use hogi. Chaho to yahan alag photo chuno:", "muted"), heroFile,
       labelled(autoBox, "Auto-tune: photo ke har tarah ke size/frame try karke sabse sasta shipping dhoondo (recommended)"),
@@ -857,6 +1179,7 @@
       lookSelect, btnPreview,
       labelled(stickersBox, "Badge bhi lagao (BESTSELLER / NEW) - Meesho QC kabhi reject kar sakta hai"),
       labelled(aiBox, "AI se alag photos bhi banao (local tool chalu hona chahiye)")),
+
     card(btnOthers,
       el("div", "Apne product ki ASLI photos chuno (1 ya zyada). 2nd photo = doosra angle, agar ho.", "muted"), otherFiles,
       extrasModeSelect, fourthSelect,
@@ -1010,7 +1333,7 @@
   // require the value to stay unchanged for STABLE_MS before believing it.
   async function waitForCost(previous) {
     const start = Date.now();
-    const minWait = Math.max(MIN_READ_WAIT_MS, cfg.waitSec * 1000);
+    const minWait = Math.max(MIN_READ_WAIT_MS, cfg.waitSec * 1000) + (priceRefreshed ? POST_REFRESH_WAIT_MS : 0);
     let last;
     let stableSince = start;
     let moved = previous === null || previous === undefined;
@@ -1092,10 +1415,13 @@
     if (!input && cfg.uploadMethod === "input") throw new Error("Front image ka upload box nahi mila (CHANGE dabane par bhi). Setup me 'Page report copy karo' dabao aur report bhejo.");
     const uploaded = await putFiles(input, cfg.heroSelector, [file]);
     await runSteps();
+    // Wait for front thumbnail src to change. Meesho can keep the same CDN URL for a moment,
+    // so also accept if the src just changes to a blob: or data: URL (crop preview).
     let frontChanged = beforeSrc === null ? null : false;
-    for (let t = 0; t < 10 && frontChanged === false; t++) {
-      if (frontSrc() !== beforeSrc) frontChanged = true;
-      else await sleep(POLL_MS);
+    for (let t = 0; t < 16 && frontChanged === false; t++) {
+      await sleep(POLL_MS);
+      const cur = frontSrc();
+      if (cur && cur !== beforeSrc) frontChanged = true;
     }
     if (cfg.refreshPrice) await refreshPrice();
     const cost = await waitForCost(beforeCost);
@@ -1148,10 +1474,10 @@
         const { b64 } = await bg({ type: "localImage", session, name: img.name });
         photos.push({ file: b64ToFile(b64, img.name, "image/jpeg"), label: img.label });
       }
-      addLog(`AI: ${photos.length} alag photos bani${failed ? `, ${failed} fail` : ""}`);
+      addLog(`AI: ${photos.length} alag photos bani${failed ? `, ${failed} fail${failedReason ? ` (${failedReason})` : ""}` : ""}`);
       return photos;
     } catch (err) {
-      addLog(`AI photos nahi bani: ${err.message}. Sirf border wali variations try hongi.`);
+      addLog(`AI photos nahi bani (${err.message}). Sirf border wali variations try hongi.`);
       return [];
     }
   }
@@ -1533,6 +1859,7 @@
         showResult(`5 alag images par bhi shipping ₹${baseline} hi raha, isliye ruk gaye.`);
         setStatus("Lagta hai Meesho shipping dobara calculate nahi kar raha. Setup kholo: 'Price box: mil gaya' dikhna chahiye (nahi to 'Pick price box' karo). Phir bhi same aaye to 'Page report copy karo' dabake report bhejo.", true);
       } else {
+
         showResult(`Original hi sabse sasta hai: ₹${baseline}`);
         setStatus(wasStopped ? "Roka gaya. Original wapas lagi." : "Dobara chalao (har baar thoda alag size/frame try hota hai) ya 'Kitni try' badhao.");
       }
@@ -1701,42 +2028,71 @@
     if (!files.length) throw new Error("Pehle '2. Baaki photos' ke neeche photos chuno.");
     const prepared = [];
     for (const [i, f] of files.entries()) {
-      if (cfg.sameFrame && winner?.spec) {
-        const bitmap = await createImageBitmap(f);
-        prepared.push(await renderVariant(bitmap, winner.spec, `photo_${i + 1}.jpg`));
-        bitmap.close();
-      } else prepared.push(f);
-    }
-    if (cfg.sameFrame && !winner?.spec) addLog("Hero ka frame abhi nahi hai, photos waise hi lag rahi hain.");
-    return uploadExtras(prepared);
+        // Simple upload for extra photos — does NOT wait for imageSources DOM change
+  // (hero detection), just fires events + waits for Meesho to process.
+  async function putFilesExtras(input, files) {
+    if (!input) return false;
+    const dt = new DataTransfer();
+    files.forEach((f) => dt.items.add(f));
+    input.files = dt.files;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await sleep(1800);   // let Meesho react
+    return true;
   }
 
   async function uploadChosenExtras() {
     const chosen = extras.filter((e) => e.use).map((e) => e.file);
     if (!chosen.length) throw new Error("Koi photo tick nahi hai.");
-    if (extras.some((e) => e.use && e.ai) && !window.confirm("Tick ki hui photos me AI wali photo bhi hai. Product sahi dikh raha hai na? Lagayein?")) return;
+    if (extras.some((e) => e.use && e.ai))
+      addLog("Dhyan do: AI wali photo bhi hai \u2014 Meesho par dikhne ke baad khud check karo.");
     await uploadExtras(chosen);
   }
 
   async function uploadExtras(prepared) {
     progress.max = prepared.length;
     progress.value = 0;
-    const first = otherInputs()[0];
     let failed = 0;
-    if (!first && !safeQuery(cfg.otherSelector)) throw new Error("Baaki photos ka upload box nahi mila. Setup me 'Pick other photos box' karo.");
-    if (!first || first.multiple) {
-      setStatus(`${prepared.length} photos ek saath laga rahe hain...`);
-      if (!(await putFiles(first, cfg.otherSelector, prepared, first ? "input" : "drop"))) failed = prepared.length;
-      await runSteps();
-      progress.value = prepared.length;
+
+    // Find the best input to use for extra photos.
+    const getInput = () => {
+      const known = document.querySelector(MEESHO_OTHER_INPUT); // #addMoreImagesInput
+      if (known) return known;
+      const picked = inputFromPicked(cfg.otherSelector);
+      if (picked) return picked;
+      const hero = heroInput();
+      const tile = frontTile();
+      return imageInputs().find((i) => i !== hero && !tile?.contains(i)) || null;
+    };
+
+    const first = getInput();
+    if (!first && !safeQuery(cfg.otherSelector))
+      throw new Error("Baaki photos ka upload box nahi mila. Setup me 'Pick other photos box' karo.");
+
+    // Always upload one-by-one so each crop/save dialog can be handled.
+    for (const [i, file] of prepared.entries()) {
+      if (stopRequested) break;
+      setStatus(`Photo ${i + 1}/${prepared.length} laga rahe hain...`);
+      // Re-detect input each iteration (Meesho may recreate it after each upload).
+      const inp = getInput() || first;
+      const ok = await putFilesExtras(inp, [file]);
+      await autoConfirm();    // handle crop/save popup if it appears
+      await runSteps();       // run any custom click steps
+      if (!ok) failed++;
+      addLog(`Photo ${i + 1}: ${ok ? "upload kiya, Meesho par check karo" : "input nahi mila"}`);
+      progress.value = i + 1;
+      await sleep(800);
+    }
+
+    if (failed > 0 && failed === prepared.length) {
+      setStatus("Photos upload nahi ho payi. Setup me 'Pick other photos box' se manually box select karo.", true);
+    } else if (failed > 0) {
+      setStatus(`${prepared.length - failed} photos upload ki, ${failed} fail. Page par check karo.`, true);
     } else {
-      for (const [i, file] of prepared.entries()) {
-        if (stopRequested) break;
-        const inputs = otherInputs();
-        setStatus(`Photo ${i + 1}/${prepared.length} laga rahe hain...`);
-        const ok = await putFiles(inputs[Math.min(i, inputs.length - 1)], cfg.otherSelector, [file], "input");
-        await runSteps();
-        if (!ok) failed++;
+      setStatus("Photos upload ki. Meesho page par dekho ki sab sahi hain, phir Submit karo.");
+    }
+  }
+ (!ok) failed++;
         addLog(`Photo ${i + 1}: ${ok ? "lag gayi" : "preview nahi dikha, check karo"}`);
         progress.value = i + 1;
         await sleep(1000);

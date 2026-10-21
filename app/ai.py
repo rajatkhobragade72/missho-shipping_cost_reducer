@@ -1,14 +1,16 @@
 """AI hero-image variants via the Pollinations image edit API.
 
 The API key is read from the POLLINATIONS_API_KEY environment variable and is never
-returned to the browser. Behind a TLS-intercepting proxy set SSL_CERT_FILE to the
-corporate CA bundle.
+returned to the browser. Behind a TLS-intercepting proxy the Windows certificate store
+is used automatically via truststore so no extra configuration is needed.
 """
 
 import base64
 import os
+import ssl
 
 import httpx
+import truststore
 
 API_URL = "https://gen.pollinations.ai/v1/images/edits"
 DEFAULT_MODEL = "black-forest-labs/flux.2-klein-4b"
@@ -49,29 +51,74 @@ PRESETS = {
 }
 
 
+HF_ROUTER_URL = "https://router.huggingface.co/hf-inference/models"
+DEFAULT_HF_MODEL = "timbrooks/instruct-pix2pix"
+
+
 class AIUnavailableError(RuntimeError):
     pass
 
 
 def is_configured() -> bool:
-    return bool(os.environ.get("POLLINATIONS_API_KEY"))
+    return bool(os.environ.get("HF_TOKEN") or os.environ.get("POLLINATIONS_API_KEY"))
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Return an SSL context that trusts the Windows certificate store (corporate proxy)."""
+    ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    return ctx
+
+
+def _edit_image_hf(image_png: bytes, prompt: str, token: str) -> bytes:
+    model = os.environ.get("HF_IMAGE_MODEL", DEFAULT_HF_MODEL)
+    url = f"{HF_ROUTER_URL}/{model}"
+    headers = {"Authorization": f"Bearer {token}"}
+    b64_img = base64.b64encode(image_png).decode("utf-8")
+    payload = {
+        "inputs": b64_img,
+        "parameters": {"prompt": prompt},
+    }
+    with httpx.Client(verify=_ssl_context(), timeout=TIMEOUT_SECONDS) as client:
+        for _ in range(3):
+            response = client.post(url, headers=headers, json=payload)
+            if response.status_code == 503 and "loading" in response.text:
+                import time
+                try:
+                    data = response.json()
+                    wait_sec = min(20, max(5, int(data.get("estimated_time", 10))))
+                except Exception:
+                    wait_sec = 10
+                time.sleep(wait_sec)
+                continue
+            response.raise_for_status()
+            return response.content
+        response.raise_for_status()
+        return response.content
+
+
+def _edit_image_pollinations(image_png: bytes, prompt: str, key: str) -> bytes:
+    with httpx.Client(verify=_ssl_context(), timeout=TIMEOUT_SECONDS) as client:
+        response = client.post(
+            API_URL,
+            headers={"Authorization": f"Bearer {key}"},
+            files={"image": ("product.png", image_png, "image/png")},
+            data={
+                "prompt": prompt,
+                "model": os.environ.get("POLLINATIONS_IMAGE_MODEL", DEFAULT_MODEL),
+                "size": "1024x1024",
+                "response_format": "b64_json",
+            },
+        )
+        response.raise_for_status()
+        return base64.b64decode(response.json()["data"][0]["b64_json"], validate=True)
 
 
 def edit_image(image_png: bytes, prompt: str) -> bytes:
-    key = os.environ.get("POLLINATIONS_API_KEY")
-    if not key:
-        raise AIUnavailableError("POLLINATIONS_API_KEY is not set")
-    response = httpx.post(
-        API_URL,
-        headers={"Authorization": f"Bearer {key}"},
-        files={"image": ("product.png", image_png, "image/png")},
-        data={
-            "prompt": prompt,
-            "model": os.environ.get("POLLINATIONS_IMAGE_MODEL", DEFAULT_MODEL),
-            "size": "1024x1024",
-            "response_format": "b64_json",
-        },
-        timeout=TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    return base64.b64decode(response.json()["data"][0]["b64_json"], validate=True)
+    hf_token = os.environ.get("HF_TOKEN")
+    if hf_token:
+        return _edit_image_hf(image_png, prompt, hf_token)
+    polli_key = os.environ.get("POLLINATIONS_API_KEY")
+    if polli_key:
+        return _edit_image_pollinations(image_png, prompt, polli_key)
+    raise AIUnavailableError("Neither HF_TOKEN nor POLLINATIONS_API_KEY is set in .env")
+

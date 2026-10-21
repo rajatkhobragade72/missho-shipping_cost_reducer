@@ -21,7 +21,9 @@ def _jpeg() -> bytes:
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DATA_DIR", tmp_path)
     monkeypatch.delenv("POLLINATIONS_API_KEY", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
     return TestClient(main.app)
+
 
 
 def _hero(client):
@@ -164,18 +166,36 @@ def test_ai_rejects_unknown_preset(client, monkeypatch):
 
 
 def test_edit_image_sends_key_and_decodes(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.setenv("POLLINATIONS_API_KEY", "FAKE-KEY-FOR-TESTING")
     seen = {}
 
-    def fake_post(url, **kwargs):
+    def fake_post(self, url, **kwargs):
         seen.update(kwargs, url=url)
         return httpx.Response(200, json={"data": [{"b64_json": "aGVsbG8="}]}, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
     assert ai.edit_image(b"png", "prompt") == b"hello"
     assert seen["url"] == ai.API_URL
     assert seen["headers"]["Authorization"] == "Bearer FAKE-KEY-FOR-TESTING"
     assert seen["data"]["prompt"] == "prompt"
+
+
+def test_edit_image_hf_sends_token_and_decodes(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "hf_fake_token_123")
+    seen = {}
+
+    def fake_post(self, url, **kwargs):
+        seen.update(kwargs, url=url)
+        return httpx.Response(200, content=b"fake-image-bytes", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    assert ai.edit_image(b"png", "prompt") == b"fake-image-bytes"
+    assert "timbrooks/instruct-pix2pix" in seen["url"]
+    assert seen["headers"]["Authorization"] == "Bearer hf_fake_token_123"
+    assert "inputs" in seen["json"]
+    assert seen["json"]["parameters"]["prompt"] == "prompt"
+
 
 
 def test_latest_session_and_cost_roundtrip(client):

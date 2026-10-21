@@ -216,7 +216,7 @@ def create_ai_variants(
 ):
     session_dir = _session_dir(session)
     if not ai.is_configured():
-        raise HTTPException(503, "AI is not configured. Add POLLINATIONS_API_KEY to the .env file and restart.")
+        raise HTTPException(503, "AI is not configured. Add HF_TOKEN or POLLINATIONS_API_KEY to the .env file and restart.")
     if not 1 <= len(presets) <= len(ai.PRESETS) or any(p not in ai.PRESETS for p in presets):
         raise HTTPException(400, "Unknown AI preset")
     source_path = session_dir / AI_SOURCE_NAME
@@ -224,23 +224,28 @@ def create_ai_variants(
         raise HTTPException(404, "Source image not found")
     source = source_path.read_bytes()
 
-    def generate(preset: str) -> imaging.Image.Image | None:
+    def generate(preset: str) -> tuple[imaging.Image.Image | None, str | None]:
         try:
-            return imaging.to_square_canvas(imaging.load_image(ai.edit_image(source, ai.PRESETS[preset][1])))
+            return imaging.to_square_canvas(imaging.load_image(ai.edit_image(source, ai.PRESETS[preset][1]))), None
         except httpx.HTTPStatusError as exc:
-            logger.warning("AI generation failed for %s: HTTP %s", preset, exc.response.status_code)
+            msg = f"HTTP {exc.response.status_code}"
+            logger.warning("AI generation failed for %s: %s", preset, msg)
+            return None, msg
         except (httpx.HTTPError, KeyError, IndexError, ValueError, ai.AIUnavailableError) as exc:
-            logger.warning("AI generation failed for %s: %s", preset, type(exc).__name__)
-        return None
+            msg = f"{type(exc).__name__}: {exc}"
+            logger.warning("AI generation failed for %s: %s", preset, msg)
+            return None, msg
 
     with ThreadPoolExecutor(max_workers=min(len(presets), ai.MAX_PARALLEL)) as pool:
         results = list(pool.map(generate, presets))
 
-    variants, failed = [], []
-    for preset, img in zip(presets, results):
+    variants, failed, first_error = [], [], None
+    for preset, (img, err) in zip(presets, results):
         label = ai.PRESETS[preset][0]
         if img is None:
             failed.append(label)
+            if first_error is None and err:
+                first_error = err
             continue
         name = f"ai_{preset}_{uuid.uuid4().hex[:6]}.jpg"
         variants.append({
@@ -256,7 +261,7 @@ def create_ai_variants(
             framed = [_style_variant(session_dir, clean, style) for style in imaging.CLEAN_STYLES]
             _update_costs(session_dir, remove=tuple(v["name"] for v in framed))
             variants.extend(framed)
-    return {"variants": variants, "failed": failed}
+    return {"variants": variants, "failed": failed, "failed_reason": first_error}
 
 
 @app.get("/api/sessions/latest")
