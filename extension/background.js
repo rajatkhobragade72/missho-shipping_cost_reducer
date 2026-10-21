@@ -67,9 +67,30 @@ function allowedImageUrl(raw) {
   }
 }
 
+async function currentSession() {
+  const res = await local("/api/current-session");
+  const data = await res.json().catch(() => ({}));
+  return typeof data.session === "string" && SESSION_RE.test(data.session) ? data.session : null;
+}
+
+// Extension ne Meesho par jo asli charge padha, wo local tool ko bhejta hai (website par dikhta hai).
+async function reportCost(msg) {
+  if (typeof msg.b64 !== "string" || msg.b64.length > MAX_UPLOAD_B64) throw new Error("Photo 15 MB se badi hai");
+  if (typeof msg.cost !== "number" || !Number.isFinite(msg.cost) || msg.cost < 0) throw new Error("Cost galat hai");
+  const form = new FormData();
+  form.append("file", new Blob([fromBase64(msg.b64)], { type: "image/jpeg" }), "measured.jpg");
+  form.append("label", String(msg.label || "").slice(0, 120));
+  form.append("cost", String(msg.cost));
+  const session = msg.session && SESSION_RE.test(msg.session) ? msg.session : await currentSession();
+  if (session) form.append("session", session);
+  const res = await local("/api/measured", { method: "POST", body: form });
+  return await res.json();
+}
+
 async function handle(msg) {
   if (msg?.type === "ping") return { ok: true };
   if (msg?.type === "aiVariants") return aiVariants(msg);
+  if (msg?.type === "reportCost") return reportCost(msg);
   if (msg?.type === "localImage") {
     if (!SESSION_RE.test(msg.session) || !NAME_RE.test(msg.name)) throw new Error("Invalid image reference");
     const res = await local(`/api/image/${msg.session}/${msg.name}`);

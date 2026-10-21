@@ -1156,6 +1156,23 @@
     }
   }
 
+  // Asli Meesho numbers local tool ko bhejta hai, taaki website (127.0.0.1:8000) par bhi dikhein.
+  async function reportMeasurements(rows) {
+    const withCost = rows.filter((r) => r.cost !== null);
+    if (!withCost.length) return;
+    let sent = 0;
+    for (const r of withCost) {
+      try {
+        await bg({ type: "reportCost", b64: await fileToB64(r.file), label: r.label, cost: r.confirmed ?? r.cost });
+        sent++;
+      } catch (err) {
+        addLog(`Website par charge nahi bhej paya: ${err.message}`);
+        return;
+      }
+    }
+    addLog(`${sent} asli charges local tool ko bhej diye (website par khud-ba-khud aa jayenge).`);
+  }
+
   function showResult(text) {
     result.textContent = text;
     result.classList.remove("hidden");
@@ -1493,6 +1510,8 @@
     renderChoices(shown, improved ? best.file : null, baseline);
     // Sab tries ka charge ek table me, taaki har photo ka number dikhe.
     renderChargeTable(results, improved ? best.file : original, original, baseline);
+    // Website par bhi wahi asli numbers bhej do (background local tool ko POST karta hai).
+    reportMeasurements(results).catch(() => {});
     const target = cfg.target || 0;
     const targetNote = target ? (best.cost <= target
       ? ` Target ₹${target} mil gaya ✓`

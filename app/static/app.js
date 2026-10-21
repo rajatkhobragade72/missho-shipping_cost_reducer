@@ -30,6 +30,30 @@ async function refreshCosts() {
   if (!document.activeElement?.classList.contains("cost")) renderGrid();
 }
 
+// Extension ke test kiye photos + unke asli Meesho charges (website par live aate hain).
+async function refreshMeasurements() {
+  if (!state.session) return;
+  const session = state.session;
+  const res = await fetch(`/api/measurements/${session}`).catch(() => null);
+  if (!res || !res.ok || session !== state.session) return;
+  const data = await res.json();
+  let changed = false;
+  for (const img of data.images || []) {
+    if (state.variants.some((v) => v.name === img.name)) continue;
+    state.variants.push({
+      name: img.name,
+      url: img.url,
+      label: img.label,
+      warnings: [],
+      ai: false,
+      style_key: null,
+      measured: true,
+    });
+    changed = true;
+  }
+  if (changed) renderGrid();
+}
+
 async function setManualCost(name, value) {
   const n = Number(value);
   if (value === "" || !Number.isFinite(n) || n < 0) {
@@ -45,6 +69,7 @@ async function setManualCost(name, value) {
 }
 
 setInterval(refreshCosts, 4000);
+setInterval(refreshMeasurements, 4000);
 
 function sortedVariants() {
   return state.variants
@@ -85,6 +110,11 @@ function renderGrid() {
       const tag = document.createElement("div");
       tag.className = "ai-tag";
       tag.textContent = "AI";
+      card.appendChild(tag);
+    } else if (v.measured) {
+      const tag = document.createElement("div");
+      tag.className = "measured-tag";
+      tag.textContent = "Meesho par test hui";
       card.appendChild(tag);
     }
     const warnings = card.querySelector(".warnings");
@@ -159,6 +189,28 @@ async function loadConfig() {
   });
 }
 
+// Page reload ho to bhi pichli session (aur uske charges) wapas aa jati hai.
+async function restoreSession() {
+  const res = await fetch("/api/sessions/latest").catch(() => null);
+  if (!res || !res.ok) return;
+  const data = await res.json().catch(() => null);
+  if (!data || !data.session || !data.images?.length) return;
+  state.session = data.session;
+  state.costs = data.costs || {};
+  state.variants = data.images.map((img) => ({
+    name: img.name,
+    url: `/api/image/${data.session}/${img.name}`,
+    label: img.label,
+    warnings: img.ai ? ["AI generated: check the product looks exactly like the real one before uploading"] : [],
+    ai: !!img.ai,
+    style_key: null,
+    measured: !!img.measured,
+  }));
+  $("results-panel").classList.remove("hidden");
+  renderGrid();
+  setStatus($("hero-status"), `Pichli session (${data.variants.length} photos) wapas aa gayi.`);
+}
+
 $("hero-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const file = $("hero-file").files[0];
@@ -169,6 +221,7 @@ $("hero-form").addEventListener("submit", async (e) => {
   try {
     const fd = new FormData();
     fd.append("file", file);
+    fd.append("set_current", "true");
     const data = await postForm("/api/hero", fd);
     Object.assign(state, {
       session: data.session,
@@ -273,3 +326,4 @@ $("download-all").addEventListener("click", () => {
 });
 
 loadConfig();
+restoreSession();

@@ -96,6 +96,10 @@
           if (msg.type === "aiVariants") return { ok: true, data: { session: "s", failed: 0,
             images: [{ name: "ai_a.jpg", label: "AI: angle" }, { name: "ai_b.jpg", label: "AI: compact" }] } };
           if (msg.type === "localImage") return { ok: true, data: { b64: await toB64(await makeImage(msg.name === "ai_a.jpg" ? "#ff9800" : "#4caf50", 700, 700)) } };
+          if (msg.type === "reportCost") {
+            (window.__reported ||= []).push(`${msg.label}:${msg.cost}:${(msg.b64 || "").length}`);
+            return { ok: true, data: { name: "measured_x.jpg" } };
+          }
           return { ok: false, error: "no background in harness" };
         } },
       storage: { local: {
@@ -186,7 +190,7 @@
       const t = panel().querySelector(".charge");
       const geo = t ? `tw=${Math.round(t.getBoundingClientRect().width)} pw=${Math.round(panel().querySelector(".body").getBoundingClientRect().width)} over=${t.scrollWidth > t.clientWidth}` : "no-table";
       clearInterval(progressTimer);
-      document.title = `DONE hero=${hero} [${window.__lastApplied}] | extras=${window.__extras} | confirms=${window.__confirms} | others=${window.__others.join(",")} | getFile touched=${!!window.__touchedGetFile} | target=${panel().querySelector("#opt-target")?.value} tries=${panel().querySelector("#opt-tries")?.value} | costs=${(window.__costs || []).slice(0, 8).join(",")} | events=${(window.__priceEvents || []).slice(0, 8).join(",")} | table=${panel().querySelector(".charge")?.querySelectorAll("tbody tr").length} ${geo} rows=[${[...panel().querySelectorAll(".charge tbody tr")].map((tr) => tr.textContent.replace(/\s+/g, " ").trim()).join(" || ")}] | errors=${window.__errors.join(" ; ")} | secs=${Math.round((Date.now() - window.__t0) / 1000)} | ${statusText()}`;
+      document.title = `DONE hero=${hero} [${window.__lastApplied}] | extras=${window.__extras} | confirms=${window.__confirms} | others=${window.__others.join(",")} | getFile touched=${!!window.__touchedGetFile} | target=${panel().querySelector("#opt-target")?.value} tries=${panel().querySelector("#opt-tries")?.value} | costs=${(window.__costs || []).slice(0, 8).join(",")} | events=${(window.__priceEvents || []).slice(0, 8).join(",")} | table=${panel().querySelector(".charge")?.querySelectorAll("tbody tr").length} ${geo} rows=[${[...panel().querySelectorAll(".charge tbody tr")].map((tr) => tr.textContent.replace(/\s+/g, " ").trim()).join(" || ")}] | reported=${(window.__reported || []).join(",")} | errors=${window.__errors.join(" ; ")} | secs=${Math.round((Date.now() - window.__t0) / 1000)} | ${statusText()}`;
       const pre = document.createElement("pre");
       pre.id = "report";
       pre.textContent = panel().querySelector("textarea").value;

@@ -9,6 +9,20 @@ Extra catalogue photos are rendered in the chosen hero style.
 AI: set `POLLINATIONS_API_KEY` in `.env` (see `.env.example`); uses `POST /v1/images/edits`
 on gen.pollinations.ai. Presets are an allowlist in `app/ai.py`; the key never reaches the browser.
 
+## Shipping charges (asli numbers, koi guess nahi)
+Sirf Meesho ka panel asli shipping charge batata hai, isliye website number guess nahi karti. Uski
+ jagah extension asli reading local tool ko bhejti hai:
+- `POST /api/measured` (multipart: `file`, `label`, `cost`, optional `session`) - photo + Meesho ka
+  ₹. Photo ka SHA-256 session se match hota hai to usi image ka cost update hota hai (duplicate nahi),
+  warna nayi `measured_<hash>.jpg` banti hai. Website ka session `data/sessions/current.json` me
+  hota hai (`POST /api/hero` with `set_current=true` set karta hai; extension ka apna `/api/hero`
+  call current nahi badalta).
+- `GET /api/current-session`, `GET /api/measurements/{session}` - extension yahan report karta hai,
+  website har 4 second me poll karke asli ₹ dikhata hai ("Meesho par test hui" tag, sabse sasti par
+  "USE THIS"). Page reload par pichli session `GET /api/sessions/latest` se wapas aa jati hai.
+- Extension side: `reportMeasurements()` (`extension/content.js`) har tested photo ka b64 background
+  ko bhejta hai, background `POST /api/measured` karta hai (host permission `127.0.0.1:8000` already hai).
+
 ## Setup
 ```
 python -m venv .venv

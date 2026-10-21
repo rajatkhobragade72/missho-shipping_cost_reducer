@@ -195,6 +195,71 @@ def test_latest_session_and_cost_roundtrip(client):
     assert client.get(f"/api/costs/{data['session']}").json() == {}
 
 
+def test_measured_charge_is_stored_and_shown(client):
+    """Extension ka asli Meesho reading website par dikhta hai (photo + charge)."""
+    data = _hero(client)
+    session = data["session"]
+    res = client.post(
+        "/api/measured",
+        files={"file": ("m.jpg", _jpeg(), "image/jpeg")},
+        data={"label": "product cut | 85% fill", "cost": 51, "session": session},
+    )
+    assert res.status_code == 200
+    name = res.json()["name"]
+    assert name.startswith("measured_")
+    costs = client.get(f"/api/costs/{session}").json()
+    assert costs[name] == {"cost": 51, "source": "meesho", "label": "product cut | 85% fill"}
+    measured = client.get(f"/api/measurements/{session}").json()
+    assert [i["name"] for i in measured["images"]] == [name]
+    assert measured["images"][0]["cost"] == 51
+    # Wahi photo dobara bhejne par naya duplicate nahi banna chahiye.
+    again = client.post(
+        "/api/measured",
+        files={"file": ("m.jpg", _jpeg(), "image/jpeg")},
+        data={"label": "product cut | 85% fill", "cost": 48, "session": session},
+    )
+    assert again.json()["name"] == name
+    assert client.get(f"/api/costs/{session}").json()[name]["cost"] == 48
+
+
+def test_measured_charge_matches_existing_image_by_hash(client):
+    """Website ki image test ho to usi ka cost update hota hai, duplicate nahi banta."""
+    data = _hero(client)
+    session = data["session"]
+    hero = data["variants"][0]
+    raw = client.get(hero["url"]).content
+    res = client.post(
+        "/api/measured",
+        files={"file": (hero["name"], raw, "image/jpeg")},
+        data={"label": "aisi hi photo", "cost": 77, "session": session},
+    )
+    assert res.json()["name"] == hero["name"]
+    costs = client.get(f"/api/costs/{session}").json()
+    assert costs[hero["name"]]["cost"] == 77
+    # Website ka apna label bacha rahe.
+    assert "label" not in costs[hero["name"]]
+
+
+def test_measured_needs_a_session(client):
+    res = client.post("/api/measured", files={"file": ("m.jpg", _jpeg(), "image/jpeg")}, data={"cost": 51})
+    assert res.status_code == 404
+
+
+def test_current_session_is_set_only_by_the_website(client):
+    assert client.get("/api/current-session").json() == {"session": None}
+    res = client.post(
+        "/api/hero",
+        files={"file": ("p.jpg", _jpeg(), "image/jpeg")},
+        data={"set_current": "true"},
+    )
+    session = res.json()["session"]
+    assert client.get("/api/current-session").json() == {"session": session}
+    # Extension ka apna hero call current session nahi badalta.
+    other = client.post("/api/hero", files={"file": ("p.jpg", _jpeg(), "image/jpeg")})
+    assert client.get("/api/current-session").json() == {"session": session}
+    assert other.json()["session"] != session
+
+
 @pytest.mark.parametrize("body", [
     {"name": "hero_1x1_90_orig.jpg", "cost": -1},
     {"name": "hero_1x1_90_orig.jpg", "cost": 38, "source": "other"},

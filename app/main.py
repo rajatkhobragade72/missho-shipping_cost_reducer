@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import logging
@@ -33,8 +34,11 @@ NAME_PATTERN = r"^[A-Za-z0-9_\-]{1,80}\.jpg$"
 NAME_RE = re.compile(NAME_PATTERN)
 AI_SOURCE_NAME = "source.png"
 COSTS_NAME = "costs.json"
-TESTABLE_PREFIXES = ("hero_", "ai_")
+CURRENT_NAME = "current.json"
+MEASURED_PREFIX = "measured_"
+TESTABLE_PREFIXES = ("hero_", "ai_", MEASURED_PREFIX)
 _costs_lock = threading.Lock()
+_hash_cache: dict[str, dict[str, tuple[float, str]]] = {}
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +118,52 @@ def _short_label(name: str) -> str:
     return name
 
 
+def _label_for(session_dir: Path, name: str) -> str:
+    """Measured photos ka label costs.json me hota hai (extension ne bheja hua)."""
+    info = _read_costs(session_dir).get(name) or {}
+    return str(info.get("label") or "") or _short_label(name)
+
+
+def _current_path() -> Path:
+    return DATA_DIR / CURRENT_NAME
+
+
+def _read_current_session() -> str | None:
+    """Website ka session (jisme user photos dekh raha hai)."""
+    path = _current_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    session = data.get("session")
+    if isinstance(session, str) and SESSION_RE.fullmatch(session) and (DATA_DIR / session).is_dir():
+        return session
+    return None
+
+
+def _set_current_session(session: str) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _current_path().write_text(json.dumps({"session": session}), encoding="utf-8")
+
+
+def _match_by_hash(session_dir: Path, digest: str) -> str | None:
+    """Same photo pehle se session me hai? (tab usi ka cost update hoga, duplicate nahi banega)."""
+    cache = _hash_cache.setdefault(session_dir.name, {})
+    for path in sorted(session_dir.glob("*.jpg")):
+        stat = path.stat()
+        hit = cache.get(path.name)
+        if hit and hit[0] == stat.st_mtime:
+            file_digest = hit[1]
+        else:
+            file_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            cache[path.name] = (stat.st_mtime, file_digest)
+        if file_digest == digest:
+            return path.name
+    return None
+
+
 def _style_variant(session_dir: Path, subject: imaging.Image.Image, style: imaging.Style) -> dict:
     name = f"hero_{style.key}.jpg"
     url = _save(session_dir, name, imaging.compose(subject, style))
@@ -136,13 +186,19 @@ def get_config():
 
 
 @app.post("/api/hero")
-def create_hero_variants(file: Annotated[UploadFile, File()]):
+def create_hero_variants(
+    file: Annotated[UploadFile, File()],
+    set_current: Annotated[bool, Form()] = False,
+):
     img = _read_upload(file)
     _cleanup_old_sessions()
     session = uuid.uuid4().hex
     session_dir = DATA_DIR / session
     session_dir.mkdir(parents=True)
     (session_dir / AI_SOURCE_NAME).write_bytes(imaging.encode_ai_source(img))
+    # Sirf website ka session "current" banta hai (extension apna alag banata hai).
+    if set_current:
+        _set_current_session(session)
 
     subject = imaging.trim_background(img)
     return {
@@ -216,7 +272,15 @@ def get_latest_session():
     )
     return {
         "session": session_dir.name,
-        "images": [{"name": p.name, "label": _short_label(p.name)} for p in images],
+        "images": [
+            {
+                "name": p.name,
+                "label": _label_for(session_dir, p.name),
+                "ai": p.name.startswith("ai_"),
+                "measured": p.name.startswith(MEASURED_PREFIX),
+            }
+            for p in images
+        ],
         "costs": _read_costs(session_dir),
     }
 
@@ -247,6 +311,59 @@ def delete_cost(session: str, name: str):
 @app.get("/api/costs/{session}")
 def get_costs(session: str):
     return _read_costs(_session_dir(session))
+
+
+@app.get("/api/current-session")
+def get_current_session():
+    """Website ka session - extension yahin apne measured charges bhejta hai."""
+    return {"session": _read_current_session()}
+
+
+@app.post("/api/measured")
+def report_measured(
+    file: Annotated[UploadFile, File()],
+    label: Annotated[str, Form(max_length=120)] = "",
+    cost: Annotated[float, Form(ge=0, le=100000)] = 0,
+    session: Annotated[str | None, Form()] = None,
+):
+    """Extension ka asli Meesho reading: photo + uska shipping charge."""
+    sid = session or _read_current_session()
+    if not sid:
+        raise HTTPException(404, "Koi website session nahi hai. Website par photo generate karo.")
+    session_dir = _session_dir(sid)
+    data = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Image larger than 15 MB")
+    digest = hashlib.sha256(data).hexdigest()
+    # Agar isi photo ka copy pehle se hai (website ki image), to usi ka cost update ho jayega.
+    name = _match_by_hash(session_dir, digest)
+    if not name:
+        name = f"{MEASURED_PREFIX}{digest[:12]}.jpg"
+        (session_dir / name).write_bytes(data)
+    # Website ki image ka apna label (style ka naam) bacha rahe, sirf cost update ho.
+    info = {"cost": cost, "source": "meesho"}
+    if name.startswith(MEASURED_PREFIX):
+        info["label"] = label
+    _update_costs(session_dir, {name: info})
+    return {"ok": True, "session": sid, "name": name, "url": f"/api/image/{sid}/{name}", "label": label, "cost": cost}
+
+
+@app.get("/api/measurements/{session}")
+def get_measurements(session: str):
+    """Extension ke test kiye photos + unke asli Meesho charges (website ise live dikhata hai)."""
+    session_dir = _session_dir(session)
+    costs = _read_costs(session_dir)
+    images = []
+    for path in sorted(session_dir.glob(f"{MEASURED_PREFIX}*.jpg")):
+        info = costs.get(path.name) or {}
+        images.append({
+            "name": path.name,
+            "label": str(info.get("label") or path.name),
+            "url": f"/api/image/{session}/{path.name}",
+            "cost": info.get("cost"),
+            "ai": False,
+        })
+    return {"session": session, "images": images, "costs": costs}
 
 
 @app.post("/api/extras")
@@ -299,7 +416,7 @@ def create_comparison_sheet(req: SheetRequest):
                 title += "  (over)"
         with imaging.Image.open(path) as img:
             img.load()
-            items.append(imaging.SheetItem(img, title, _short_label(entry.name), best))
+            items.append(imaging.SheetItem(img, title, _label_for(session_dir, entry.name), best))
     return Response(imaging.encode_jpeg(imaging.build_sheet(items)), media_type="image/jpeg")
 
 

@@ -26,6 +26,7 @@ button:disabled { opacity: .5; cursor: wait; }
 .ai-box h3 { margin: 0 0 6px; font-size: 15px; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 10px; font-size: 14px; }
 .card .ai-tag { position: absolute; top: 6px; right: 6px; background: #5b2bd6; color: #fff; border-radius: 12px; padding: 2px 8px; font-size: 12px; }
+.card .measured-tag { position: absolute; top: 6px; right: 6px; background: #1b8a3a; color: #fff; border-radius: 12px; padding: 2px 8px; font-size: 12px; }
 .card .warnings { margin: 0; padding-left: 16px; color: #a15c00; }
 .card .cost { width: 80px; }
 .card .actions { display: flex; gap: 6px; flex-wrap: wrap; }
