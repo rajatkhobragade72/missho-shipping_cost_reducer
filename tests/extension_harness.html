@@ -100,6 +100,30 @@
             (window.__reported ||= []).push(`${msg.label}:${msg.cost}:${(msg.b64 || "").length}`);
             return { ok: true, data: { name: "measured_x.jpg" } };
           }
+          if (msg.type === "seoRank") {
+            (window.__seo ||= []).push(`${msg.keyword}:${msg.related}`);
+            const mk = (i) => ({ id: `p${i}`, title: `Microfiber Cloth Pack of ${i + 1} Reusable Cleaning Cloth`, price: 99 + i * 10, rating: 4, reviews: 1200 + i, badges: ["Meesho's Choice"] });
+            const products = Array.from({ length: 12 }, (_, i) => mk(i));
+            const rows = [
+              { keyword: msg.keyword, found: true, rank: 3, total: products.length, topTitle: products[0].title, topPrice: products[0].price, error: null },
+              { keyword: `${msg.keyword} reusable`, found: false, rank: null, total: products.length, topTitle: products[0].title, topPrice: products[0].price, error: null },
+            ];
+            return { ok: true, data: {
+              user: { id: "p1", title: "Microfiber Cloth", price: 149, rating: 3.5, reviews: 10 },
+              rows,
+              related: true,
+              analysis: {
+                keyword: msg.keyword,
+                stats: { priceMedian: 150, priceMin: 99, priceMax: 219, ratingAvg: 4, reviewsMedian: 1200, titleLenAvg: 55, badgeShare: 1 },
+                top: products,
+                missingWords: ["reusable", "pack"],
+                suggestions: [
+                  { title: "Title me ye words add karo", detail: "Top 10 me \"reusable\" aa raha hai", priority: "high" },
+                  { title: "Price thoda zyada hai", detail: "Tumhari price ₹149, median ₹150", priority: "good" },
+                ],
+              },
+            } };
+          }
           return { ok: false, error: "no background in harness" };
         } },
       storage: { local: {
@@ -182,15 +206,26 @@
       const extraLabels = [...panel().querySelectorAll(".choices")].pop().textContent;
       window.__extras = extraLabels.match(/\d\. [^A]*?(?=Asli|AI)/g)?.join(" / ");
       button("Chuni hui photos").click();
-      await waitFor(/Photos laga di|nahi dikha|Koi photo/);
+      await waitFor(/Photos laga di|Photos upload ki|nahi dikha|Koi photo/);
+      // 3. Ranking / SEO check (fake background se).
+      const seoUrl = panel().querySelector("#opt-seo-url");
+      const seoKw = panel().querySelector("#opt-seo-kw");
+      seoUrl.value = "https://www.meesho.com/microfiber-cloth/p/12345678/";
+      seoKw.value = "microfiber cloth";
+      button("3.").click();
+      // SEO report ka box jab tak visible na ho, wait karo.
+      for (let i = 0; i < 40 && !(panel().querySelector(".seo") && !panel().querySelector(".seo").classList.contains("hidden")); i++) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      const seoText = panel().querySelector(".seo")?.textContent.replace(/\s+/g, " ").trim() || "no-seo";
       button("Page report").click();
       await new Promise((r) => setTimeout(r, 500));
       // Sab details khol do (charge table) taaki screenshot me dikhe.
       for (const d of panel().querySelectorAll("details")) d.open = true;
-      const t = panel().querySelector(".charge");
+      const t = panel().querySelector("#charge-table");
       const geo = t ? `tw=${Math.round(t.getBoundingClientRect().width)} pw=${Math.round(panel().querySelector(".body").getBoundingClientRect().width)} over=${t.scrollWidth > t.clientWidth}` : "no-table";
       clearInterval(progressTimer);
-      document.title = `DONE hero=${hero} [${window.__lastApplied}] | extras=${window.__extras} | confirms=${window.__confirms} | others=${window.__others.join(",")} | getFile touched=${!!window.__touchedGetFile} | target=${panel().querySelector("#opt-target")?.value} tries=${panel().querySelector("#opt-tries")?.value} | costs=${(window.__costs || []).slice(0, 8).join(",")} | events=${(window.__priceEvents || []).slice(0, 8).join(",")} | table=${panel().querySelector(".charge")?.querySelectorAll("tbody tr").length} ${geo} rows=[${[...panel().querySelectorAll(".charge tbody tr")].map((tr) => tr.textContent.replace(/\s+/g, " ").trim()).join(" || ")}] | reported=${(window.__reported || []).join(",")} | errors=${window.__errors.join(" ; ")} | secs=${Math.round((Date.now() - window.__t0) / 1000)} | ${statusText()}`;
+      document.title = `DONE hero=${hero} [${window.__lastApplied}] | extras=${window.__extras} | confirms=${window.__confirms} | others=${window.__others.join(",")} | getFile touched=${!!window.__touchedGetFile} | target=${panel().querySelector("#opt-target")?.value} tries=${panel().querySelector("#opt-tries")?.value} | costs=${(window.__costs || []).slice(0, 8).join(",")} | events=${(window.__priceEvents || []).slice(0, 8).join(",")} | table=${panel().querySelector("#charge-table")?.querySelectorAll("tbody tr").length} ${geo} rows=[${[...panel().querySelectorAll("#charge-table tbody tr")].map((tr) => tr.textContent.replace(/\s+/g, " ").trim()).join(" || ")}] | reported=${(window.__reported || []).join(",")} | seo=${seoText.slice(0, 260)} | seomsg=${(window.__seo || []).join(",")} | errors=${window.__errors.join(" ; ")} | secs=${Math.round((Date.now() - window.__t0) / 1000)} | ${statusText()}`;
       const pre = document.createElement("pre");
       pre.id = "report";
       pre.textContent = panel().querySelector("textarea").value;

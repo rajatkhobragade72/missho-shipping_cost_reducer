@@ -1056,6 +1056,16 @@
     .charge .rs{font-weight:700;color:#1b5e20;white-space:nowrap}
     .charge tr.best td{background:#e8f5e9}
     .charge tr.win td{background:#fff3cd}
+    .seo{margin-top:6px;font-size:12px;display:grid;gap:6px;max-height:420px;overflow:auto}
+    .seo-table{width:100%;border-collapse:collapse;font-size:11px;margin-top:4px;table-layout:auto}
+    .seo-table th{text-align:left;color:#666;font-weight:600;border-bottom:1px solid #eee;padding:3px 2px}
+    .seo-table td{padding:3px 2px;border-bottom:1px solid #f2f2f2;vertical-align:top;word-break:break-word}
+    .seo-table .rs{font-weight:700;color:#1b5e20;white-space:nowrap}
+    .seo-table tr.best td{background:#e8f5e9}
+    .seo-list{margin:0;padding-left:18px;display:grid;gap:6px}
+    .seo-list li{border-left:3px solid #eee;padding-left:6px}
+    .seo-list li.seo-high{border-left-color:#b00020}
+    .seo-list li.seo-good{border-left-color:#1b8a3a}
     .hidden{display:none}`;
   const el = (tag, text, cls) => {
     const n = document.createElement(tag);
@@ -1120,6 +1130,15 @@
   const aiBox = checkbox();
   const refreshPriceBox = checkbox();
 
+  // ---------- ranking / SEO check ----------
+  const seoUrl = Object.assign(el("input", null, "ctx-inp"), { id: "opt-seo-url", type: "url", placeholder: "https://www.meesho.com/.../p/xxxx/" });
+  const seoKeyword = Object.assign(el("input", null, "ctx-inp"), { id: "opt-seo-kw", type: "text", placeholder: "microfiber cloth" });
+  const seoRelatedBox = checkbox();
+  seoRelatedBox.checked = true;
+  const btnSeo = el("button", "3. Ranking / SEO check karo", "big");
+  const seoStatus = el("div", "", "muted");
+  const seoReport = el("div", null, "seo hidden");
+
   const btnStop = el("button", "Stop", "stop hidden");
   const progress = Object.assign(el("progress"), { max: 1, value: 0 });
   const status = el("div", "");
@@ -1131,6 +1150,7 @@
   const chargeWrap = el("details", null, "hidden");
   const chargeSummary = el("summary", "Har photo ka shipping charge dekho");
   const chargeTable = el("table", null, "charge");
+  chargeTable.id = "charge-table";
   chargeWrap.append(chargeSummary, chargeTable);
   let chargeUrls = [];
   const btnDownload = el("button", "Sasti image download karo", "ghost hidden");
@@ -1186,6 +1206,12 @@
       row(el("span", "Size (cm): Lambaai"), sizeL, el("span", "Chaudaai"), sizeW),
       labelled(sameFrameBox, "Hero jaisa frame lagao (sirf 'waise hi' mode me)"),
       extrasWrap),
+    card(btnSeo,
+      el("div", "Apne product ka Meesho URL daalo (product page ka link) aur wo keyword jis pe rank chahiye.", "muted"),
+      seoUrl, seoKeyword,
+      labelled(seoRelatedBox, "Related keywords bhi check karo (top results se nikle keywords)"),
+      el("div", "Extension asli Meesho search karega, tumhara rank nikalega aur top-20 products ka analysis dega: title keywords, price, rating, reviews, badges. Suggestion ke liye sirf asli data use hota hai.", "muted"),
+      seoStatus, seoReport),
     row(btnStop, btnDownload), progress, status, result, choicesTitle, choices, chargeWrap, log, setup,
   );
   box.append(head, body);
@@ -1331,9 +1357,9 @@
   // Meesho answers asynchronously and an old response can land first, so never take the first change:
   // wait a minimum time, wait for the number to actually move away from the pre-upload one, and
   // require the value to stay unchanged for STABLE_MS before believing it.
-  async function waitForCost(previous) {
+  async function waitForCost(previous, refreshed = false) {
     const start = Date.now();
-    const minWait = Math.max(MIN_READ_WAIT_MS, cfg.waitSec * 1000) + (priceRefreshed ? POST_REFRESH_WAIT_MS : 0);
+    const minWait = Math.max(MIN_READ_WAIT_MS, cfg.waitSec * 1000) + (refreshed ? POST_REFRESH_WAIT_MS : 0);
     let last;
     let stableSince = start;
     let moved = previous === null || previous === undefined;
@@ -1423,8 +1449,8 @@
       const cur = frontSrc();
       if (cur && cur !== beforeSrc) frontChanged = true;
     }
-    if (cfg.refreshPrice) await refreshPrice();
-    const cost = await waitForCost(beforeCost);
+    const refreshed = cfg.refreshPrice ? await refreshPrice() : false;
+    const cost = await waitForCost(beforeCost, refreshed);
     return { cost, uploaded, frontChanged };
   }
 
@@ -1597,6 +1623,70 @@
       else addRow(r.file, r.label + (r.ai ? " (AI)" : ""), `₹${r.confirmed ?? r.cost}${r.confirmed !== undefined ? " ✓" : ""}`, r.file === appliedFile ? "win" : (r.cheaper ? "best" : ""), false);
     }
     chargeTable.append(thead, tbody);
+  }
+
+  // Ranking / SEO report: har keyword ka rank, top-20 ka analysis aur suggestions.
+  function renderSeoReport(data) {
+    seoReport.replaceChildren();
+    seoReport.classList.remove("hidden");
+    const user = data.user || {};
+    seoReport.append(el("div", `Tumhara product: ${user.title || "(title nahi mili)"}`, "muted"));
+    const uprice = user.price ? `₹${user.price}` : "price nahi mili";
+    const urating = user.rating ? `${user.rating}★` : "rating nahi mili";
+    seoReport.append(el("div", `${uprice} · ${urating}${user.reviews ? ` · ${user.reviews} reviews` : ""}`, "muted"));
+
+    // 1) Keyword wise rank.
+    const table = el("table", null, "seo-table");
+    const thead = el("thead");
+    const hrow = el("tr");
+    hrow.append(el("th", "Keyword"), el("th", "Tumhara rank"), el("th", "#1 ka product"));
+    thead.append(hrow);
+    const tbody = el("tbody");
+    for (const r of data.rows || []) {
+      const tr = el("tr", null, r.found ? "best" : "");
+      const rank = r.error ? "error" : r.found ? `#${r.rank} / ${r.total}` : `top ${r.total} me nahi`;
+      tr.append(el("td", r.keyword), el("td", rank, r.found ? "rs" : "muted"),
+        el("td", `${r.topTitle ? r.topTitle.slice(0, 70) : "-"}${r.topPrice ? ` (₹${r.topPrice})` : ""}`));
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    seoReport.append(el("div", "Keyword wise rank:", "muted"), table);
+
+    // 2) Top 20 ka table.
+    const a = data.analysis;
+    if (a && a.top && a.top.length) {
+      const st = a.stats || {};
+      const t2 = el("table", null, "seo-table");
+      const th2 = el("thead");
+      const hr2 = el("tr");
+      hr2.append(el("th", "#"), el("th", "Product"), el("th", "Price"), el("th", "Rating"));
+      th2.append(hr2);
+      const tb2 = el("tbody");
+      a.top.slice(0, 10).forEach((p, i) => {
+        const tr = el("tr");
+        tr.append(el("td", String(i + 1)),
+          el("td", `${(p.title || "").slice(0, 80)}${p.badges && p.badges.length ? ` [${p.badges[0]}]` : ""}`),
+          el("td", p.price ? `₹${p.price}` : "-", "rs"),
+          el("td", p.rating ? `${p.rating}★${p.reviews ? ` (${p.reviews})` : ""}` : "-", "muted"));
+        tb2.append(tr);
+      });
+      t2.append(th2, tb2);
+      const wrap = el("details");
+      wrap.append(el("summary", `Top ${Math.min(10, a.top.length)} competitors dekho (median price ₹${st.priceMedian ?? "?"}, avg rating ${st.ratingAvg ?? "?"}★)`), t2);
+      seoReport.append(wrap);
+    }
+
+    // 3) Suggestions.
+    if (a && a.suggestions && a.suggestions.length) {
+      seoReport.append(el("div", "Kya improve karna hai:", "muted"));
+      const ul = el("ul", null, "seo-list");
+      for (const s of a.suggestions) {
+        const li = el("li", null, s.priority === "high" ? "seo-high" : s.priority === "good" ? "seo-good" : "");
+        li.append(el("strong", s.title), el("div", s.detail));
+        ul.append(li);
+      }
+      seoReport.append(ul);
+    }
   }
 
   // Shows how the first few variations will look, without uploading anything.
@@ -1866,6 +1956,29 @@
     }
   }
 
+  // ---------- ranking / SEO check ----------
+  async function runSeoCheck() {
+    const url = seoUrl.value.trim();
+    const keyword = seoKeyword.value.trim();
+    if (!url) throw new Error("Apne product ka Meesho URL daalo (product page ka link).");
+    if (!keyword) throw new Error("Keyword daalo, jaise: microfiber cloth");
+    seoStatus.textContent = "Meesho search ho rahi hai ( asli page khul raha hai, 10-60 second lage sakte hain)...";
+    seoReport.classList.add("hidden");
+    const res = await withKeepAlive(bg({
+      type: "seoRank", url, keyword, related: seoRelatedBox.checked,
+    }));
+    if (!res || res.error) throw new Error(res?.error || "Rank check nahi ho paya");
+    const data = res.data || res;
+    if (!data.rows || !data.rows.length) throw new Error("Koi search result nahi mila - Meesho ka page shayad login/location maang raha hai.");
+    renderSeoReport(data);
+    const ranked = data.rows.filter((r) => r.found);
+    const best = ranked.sort((a, b) => a.rank - b.rank)[0];
+    seoStatus.textContent = best
+      ? `Tumhara best rank #${best.rank} ("${best.keyword}") me hai. ${ranked.length} keyword me dikha.`
+      : `Tumhara product top results me nahi mila (${data.rows[0]?.total || 0} products check kiye). Keyword ya title badal ke try karo.`;
+    addLog(`SEO check: ${data.rows.map((r) => `${r.keyword}=${r.found ? "#" + r.rank : "nahi"}`).join(", ")}`);
+  }
+
   // ---------- flow 2: other photos ----------
   // Photo 2 = another angle, photo 3 = close-up of the real texture, photo 4 = size chart or daily use.
   const EXTRA_SIDE = 1100;
@@ -2028,7 +2141,17 @@
     if (!files.length) throw new Error("Pehle '2. Baaki photos' ke neeche photos chuno.");
     const prepared = [];
     for (const [i, f] of files.entries()) {
-        // Simple upload for extra photos — does NOT wait for imageSources DOM change
+      if (cfg.sameFrame && winner?.spec) {
+        const bitmap = await createImageBitmap(f);
+        prepared.push(await renderVariant(bitmap, winner.spec, `photo_${i + 1}.jpg`));
+        bitmap.close();
+      } else prepared.push(f);
+    }
+    if (cfg.sameFrame && !winner?.spec) addLog("Hero ka frame abhi nahi hai, photos waise hi lag rahi hain.");
+    return uploadExtras(prepared);
+  }
+
+  // Simple upload for extra photos - does NOT wait for imageSources DOM change
   // (hero detection), just fires events + waits for Meesho to process.
   async function putFilesExtras(input, files) {
     if (!input) return false;
@@ -2092,15 +2215,6 @@
       setStatus("Photos upload ki. Meesho page par dekho ki sab sahi hain, phir Submit karo.");
     }
   }
- (!ok) failed++;
-        addLog(`Photo ${i + 1}: ${ok ? "lag gayi" : "preview nahi dikha, check karo"}`);
-        progress.value = i + 1;
-        await sleep(1000);
-      }
-    }
-    if (failed) setStatus(`${failed} photo ka preview nahi dikha. Page par check karo, ya Setup me 'Pick other photos box' karo.`, true);
-    else setStatus("Photos laga di. Form check karke Submit karo.");
-  }
 
   function pageReport() {
     const short = (s, n = 80) => (s || "").replace(/\s+/g, " ").trim().slice(0, n);
@@ -2155,6 +2269,7 @@
   });
   otherFiles.addEventListener("change", () => { if (otherFiles.files.length) guarded(addOtherPhotos); });
   btnUploadExtras.addEventListener("click", () => guarded(uploadChosenExtras));
+  btnSeo.addEventListener("click", () => guarded(runSeoCheck));
   // Prefill the size chart from the product dimensions already typed in the Meesho form.
   const prefillSize = () => {
     if (!sizeL.value) sizeL.value = pageNumber("#product_length");

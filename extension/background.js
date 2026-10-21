@@ -1,3 +1,8 @@
+// Ranking / SEO feature (Meesho search + analysis).
+import {
+  searchMeesho, fetchProductPage, productIdFromUrl, isMeeshoProductUrl, buildRelatedKeywords, buildReport,
+} from "./seo.js";
+
 const MEESHO = "https://supplier.meesho.com/";
 const LOCAL_TOOL = "http://127.0.0.1:8000";
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
@@ -88,10 +93,46 @@ async function reportCost(msg) {
   return await res.json();
 }
 
-async function handle(msg) {
+// Meesho par ranking + SEO check: product URL se asli search results nikal kar rank aur
+// "kya improve karna hai" nikalta hai.
+async function seoRank(msg) {
+  const url = String(msg.url || "").trim();
+  const keyword = String(msg.keyword || "").trim();
+  if (!url) throw new Error("Apne product ka URL daalo (Meesho product page ka link)");
+  if (!keyword) throw new Error("Keyword daalo, jaise: microfiber cloth");
+  if (!isMeeshoProductUrl(url)) throw new Error("Yeh Meesho ka product URL nahi lagta (example: https://www.meesho.com/.../p/12345678/)");
+  const id = productIdFromUrl(url);
+
+  // 1) Tumhari product ki details (title/price/rating).
+  let user = { id, title: "", price: null, rating: null, reviews: null };
+  const page = await fetchProductPage(url);
+  if (page && !page.error) {
+    user = { ...user, title: page.title || "", price: page.price ?? null, rating: page.rating ?? null, reviews: page.reviews ?? null };
+  }
+
+  // 2) Main keyword ka search + rank.
+  const searches = [];
+  const first = await searchMeesho(keyword);
+  searches.push(first);
+
+  // 3) Related keywords (top products ke titles se nikle).
+  let relatedKeywords = [];
+  if (msg.related && first && first.products && first.products.length) {
+    relatedKeywords = buildRelatedKeywords(keyword, first.products, 4);
+    for (const kw of relatedKeywords) {
+      if (searches.length >= 5) break;
+      const res = await searchMeesho(kw);
+      searches.push(res);
+    }
+  }
+  return buildReport(user, searches, relatedKeywords);
+}
+
+export async function handle(msg) {
   if (msg?.type === "ping") return { ok: true };
   if (msg?.type === "aiVariants") return aiVariants(msg);
   if (msg?.type === "reportCost") return reportCost(msg);
+  if (msg?.type === "seoRank") return seoRank(msg);
   if (msg?.type === "localImage") {
     if (!SESSION_RE.test(msg.session) || !NAME_RE.test(msg.name)) throw new Error("Invalid image reference");
     const res = await local(`/api/image/${msg.session}/${msg.name}`);

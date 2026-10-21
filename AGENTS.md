@@ -23,6 +23,25 @@ Sirf Meesho ka panel asli shipping charge batata hai, isliye website number gues
 - Extension side: `reportMeasurements()` (`extension/content.js`) har tested photo ka b64 background
   ko bhejta hai, background `POST /api/measured` karta hai (host permission `127.0.0.1:8000` already hai).
 
+## Ranking / SEO check (Meesho search)
+Panel ka teesra button ("3. Ranking / SEO check karo"): user apna product URL + keyword deta hai,
+extension asli Meesho search karke rank batata hai aur top-20 ka analysis deta hai.
+- Plain fetch nahi chalta: `https://www.meesho.com/search?q=...` par Akamai 403 (Access Denied) deta
+  hai, isliye `extension/seo.js` asli browser tab kholta hai (`chrome.tabs.create` +
+  `chrome.scripting.executeScript`) aur wahi se results nikalta hai. Tab hamesha band hota hai.
+- `extension/seo.js`: page ke andar chalne wale extractors (`extractSearchResults`, `extractProductPage`
+  - inke andar bahar ka koi variable use nahi hona chahiye) + pure analysis (`tokenize`,
+  `buildRelatedKeywords`, `analyzeSeo`, `buildReport`, `isMeeshoProductUrl`).
+- `extension/background.js` (ab ES module: manifest me `"type": "module"`) `seoRank` message handle
+  karta hai: product page ki asli details -> main keyword ka search -> top titles se related keywords
+  (max 4) -> har keyword ka rank -> `buildReport`. Content script `runSeoCheck()` result panel me
+  dikhata hai (keyword-wise rank table, top-10 competitors ka `<details>`, suggestions).
+- Suggestions sirf asli data se: title me missing words (top-10 titles me 3+ baar aane wale), pack
+  count, price vs median, rating/reviews vs top-10 average, badge share, title length.
+- `NOISE_WORDS` me sirf filler words hain; category words (microfiber, cloth, towel...) NOISE me nahi,
+  warna "missing words" apna hi main keyword bol deta.
+- Related keywords har run par data se banti hain (guess nahi); search me total 5 keyword tak.
+
 ## Setup
 ```
 python -m venv .venv
@@ -51,13 +70,15 @@ such as gemini-2.5-flash-image return HTTP 402 on free keys.
 Standalone (does NOT need the local server), modelled on SnapSeller "Least Price Image" /
 Ecomdost / RapidSKU: the product photo is untouched, only a frame is added. Content script on
 `https://supplier.meesho.com/*` injects a "Meesho Shipping Optimizer" panel (closed shadow DOM,
-textContent only) with two buttons:
+textContent only) with three buttons:
 1. Hero: takes the page's current front image (or a chosen file), reads the baseline cost, then
    renders N canvas variations (7 border patterns x 4 widths x random palette, optional corner
    sticker; seeded per run so re-runs try new colours), uploads each via DataTransfer on the
    front `input[type=file]`, waits for text near "Shipping/Delivery ... ₹" to change/stabilise,
    keeps the cheapest and re-applies it (original if nothing is cheaper). Optional target ₹ stops early.
 2. Other photos: uploads chosen files into the remaining image inputs (optionally with the winning frame).
+3. Ranking / SEO check: product URL + keyword -> real Meesho search, rank + SEO suggestions
+   (see "Ranking / SEO check" below).
 Real panel (user screenshot): "Uploaded Images" block, front tile = thumbnail + "Front Image*" +
 "CHANGE" link (no visible file input), Image 2..n tiles, "Bank Settlement Breakdown" below. So the
 hero input is found via the "Front Image" tile; if none, the extension clicks CHANGE and grabs the
@@ -122,6 +143,11 @@ the title shows `DONE hero=... | others=...` (plus `secs=`, `confirms=`, `errors
 fake panel answers `window.confirm` with yes and prints page errors into the title. Query switches:
 `?preview=1` (look preview + product-cover % per card), `?target=45&tv=1` (stored target),
 `?hit=1` (the first photo costs exactly 40, to test the "target reached" path).
+The harness also fakes `seoRank` (so the SEO panel is smoke-tested) and prints `seo=`, `seomsg=`
+into the title; the charge table is `#charge-table` (SEO tables use `.seo-table`).
+`node --check extension/content.js` + `extension/background.js` must pass before every run - a
+truncated function silently breaks the whole content script (it used to ship a broken
+`addOtherPhotos` body and a `priceRefreshed` ReferenceError in `waitForCost`).
 
 ## Verify
 ```
