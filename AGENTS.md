@@ -72,6 +72,9 @@ Real run: the charge does change per image (₹267–₹4998 for the same produc
 loop the top 3 cheaper images are re-uploaded and the cheapest confirmed reading wins.
 After a run, `renderChoices` shows up to 6 cheapest images (thumbnail, ₹, confirm mark, click =
 zoom) with "Ye lagao" (re-uploads that image and reads the charge) and "Download" per card.
+`renderChargeTable` (a collapsed `<details>` in the panel) lists EVERY try: thumbnail, frame/size
+label and the charge Meesho gave (confirmed readings get a ✓), cheapest first, with the original
+photo as a reference row on top; "Page report copy karo" includes the same list as text.
 Auto-tune (default ON, `cfg.autoTune`): the hero flow stops guessing and measures instead. It
 crops the photo to the product (`trimBox`/`trimmedVersion`, plain background only), then tests one
 photo per lever and keeps whatever Meesho charges least: product fill 0.98/0.85/0.7/0.55, full

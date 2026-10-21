@@ -734,6 +734,15 @@
     details summary{cursor:pointer;color:#9f2089;font-size:12px}
     details .card{margin-top:6px;background:#fafafa}
     ol{margin:0;padding-left:18px;font-size:12px;max-height:160px;overflow:auto}
+    .charge{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px;table-layout:fixed}
+    .charge th{text-align:left;color:#666;font-weight:600;border-bottom:1px solid #eee;padding:3px 2px}
+    .charge td{padding:3px 2px;border-bottom:1px solid #f2f2f2;vertical-align:middle;word-break:break-word}
+    .charge td:first-child{width:32px}
+    .charge td:last-child{width:64px}
+    .charge img{width:26px;height:26px;object-fit:contain;border:1px solid #eee;border-radius:4px;cursor:zoom-in;background:#fff}
+    .charge .rs{font-weight:700;color:#1b5e20;white-space:nowrap}
+    .charge tr.best td{background:#e8f5e9}
+    .charge tr.win td{background:#fff3cd}
     .hidden{display:none}`;
   const el = (tag, text, cls) => {
     const n = document.createElement(tag);
@@ -796,6 +805,12 @@
   const choicesTitle = el("div", "Sabse sasti photos: jo pasand ho uspar 'Ye lagao' dabao (photo par click = badi dikhegi)", "muted hidden");
   const choices = el("div", null, "choices hidden");
   let choiceUrls = [];
+  // Har try ki photo aur uska shipping charge, ek hi table me (saste pehle).
+  const chargeWrap = el("details", null, "hidden");
+  const chargeSummary = el("summary", "Har photo ka shipping charge dekho");
+  const chargeTable = el("table", null, "charge");
+  chargeWrap.append(chargeSummary, chargeTable);
+  let chargeUrls = [];
   const btnDownload = el("button", "Sasti image download karo", "ghost hidden");
   const log = el("ol");
 
@@ -848,7 +863,7 @@
       row(el("span", "Size (cm): Lambaai"), sizeL, el("span", "Chaudaai"), sizeW),
       labelled(sameFrameBox, "Hero jaisa frame lagao (sirf 'waise hi' mode me)"),
       extrasWrap),
-    row(btnStop, btnDownload), progress, status, result, choicesTitle, choices, log, setup,
+    row(btnStop, btnDownload), progress, status, result, choicesTitle, choices, chargeWrap, log, setup,
   );
   box.append(head, body);
   root.append(style, box);
@@ -1203,6 +1218,44 @@
     }
   }
 
+  // Table of every photo that was tried and the shipping charge Meesho gave for it.
+  function renderChargeTable(rows, appliedFile, original, baseline) {
+    chargeUrls.forEach((u) => URL.revokeObjectURL(u));
+    chargeUrls = [];
+    chargeTable.replaceChildren();
+    chargeWrap.classList.toggle("hidden", !rows.length);
+    if (!rows.length) return;
+    const sorted = rows.slice().sort((a, b) => (a.cost === null ? 1e9 : a.cost) - (b.cost === null ? 1e9 : b.cost));
+    const cheaper = sorted.filter((r) => r.cost !== null && r.cheaper).length;
+    chargeSummary.textContent = `Har photo ka shipping charge (${sorted.length} try, ${cheaper} saste, saste pehle)`;
+    const thead = el("thead");
+    const hrow = el("tr");
+    hrow.append(el("th", "Photo"), el("th", "Frame / size"), el("th", "Shipping"));
+    thead.append(hrow);
+    const tbody = el("tbody");
+    const addRow = (file, name, costText, cls, muted) => {
+      const url = URL.createObjectURL(file);
+      chargeUrls.push(url);
+      const tr = el("tr", null, cls);
+      const tdImg = el("td");
+      const img = Object.assign(el("img"), { src: url, alt: name, title: name });
+      img.addEventListener("click", () => zoom(url));
+      tdImg.append(img);
+      const tdCost = el("td", costText, muted ? "muted" : "rs");
+      tr.append(tdImg, el("td", name), tdCost);
+      tbody.append(tr);
+    };
+    // Pehle wali photo reference ke liye upar.
+    if (original && baseline !== null && baseline !== undefined) {
+      addRow(original, "Original (jo thi pehle)", `₹${baseline}`, "", false);
+    }
+    for (const r of sorted) {
+      if (r.cost === null) addRow(r.file, r.label + (r.ai ? " (AI)" : ""), r.landed ? "—" : "skip", "", true);
+      else addRow(r.file, r.label + (r.ai ? " (AI)" : ""), `₹${r.confirmed ?? r.cost}${r.confirmed !== undefined ? " ✓" : ""}`, r.file === appliedFile ? "win" : (r.cheaper ? "best" : ""), false);
+    }
+    chargeTable.append(thead, tbody);
+  }
+
   // Shows how the first few variations will look, without uploading anything.
   async function previewLooks() {
     const source = heroFile.files[0] || await pageHeroFile();
@@ -1290,6 +1343,9 @@
       const landed = uploaded && frontChanged !== false;
       failsInARow = landed ? 0 : failsInARow + 1;
       const savedNote = frontChanged === false ? "  (front image NAHI badli)" : "";
+      // Har try ka record (chahe sasta ho ya mehnga) table ke liye.
+      const entry = { cost: null, file: cand.file, spec: cand.spec || null, label: cand.label, ai: !!cand.ai, plan: cand.plan || null, landed, cheaper: false, confirmed: undefined };
+      results.push(entry);
       if (!landed) addLog(`${cand.label}: photo Meesho par nahi lagi (skip kiya)${savedNote}`);
       if (cost === null) {
         readFails++;
@@ -1297,10 +1353,11 @@
       } else {
         const mark = cost < best.cost ? (cand.ai ? "  ← sasta par AI (khud check karo)" : "  ← naya best") : "";
         addLog(`${cand.label}: ₹${cost}${mark}${savedNote}`);
+        entry.cost = cost;
+        entry.cheaper = cost < baseline;
         // Sirf wahi photo "best" ban sakti hai jo Meesho par sach me lagi.
         if (landed && cost < best.cost) best = { cost, file: cand.file, spec: cand.spec || null, label: cand.label, ai: !!cand.ai };
         if (cand.plan && !cand.ai && cost < bestPlanCost) { bestPlanCost = cost; bestPlan = cand.plan; }
-        if (cost < baseline && landed) results.push({ cost, file: cand.file, spec: cand.spec || null, label: cand.label, ai: !!cand.ai, plan: cand.plan || null });
         if (cost === baseline) sameAsOriginal++;
       }
       if (count >= 5 && sameAsOriginal >= 5) { stuck = true; stopSearch = true; return false; }
@@ -1396,7 +1453,9 @@
     // the one that is cheapest on the second reading too.
     const wasStopped = stopRequested;
     stopRequested = false;
-    const candidates = results.slice().sort((a, b) => a.cost - b.cost).slice(0, wasStopped ? 1 : CONFIRM_TOP);
+    // Sirf wahi photos confirm karni hain jo original se sasti thin.
+    const cheaper = results.filter((r) => r.cost !== null && r.cheaper);
+    const candidates = cheaper.slice().sort((a, b) => a.cost - b.cost).slice(0, wasStopped ? 1 : CONFIRM_TOP);
     let confirmed = null;
     for (const [n, c] of candidates.entries()) {
       setStatus(`Confirm kar rahe hain ${n + 1}/${candidates.length}: ${c.label} (pehle ₹${c.cost})...`);
@@ -1430,8 +1489,10 @@
       }
     }
     winner = improved ? best : null;
-    const shown = results.slice().sort((a, b) => (a.confirmed ?? a.cost) - (b.confirmed ?? b.cost)).slice(0, MAX_CHOICES);
+    const shown = cheaper.slice().sort((a, b) => (a.confirmed ?? a.cost) - (b.confirmed ?? b.cost)).slice(0, MAX_CHOICES);
     renderChoices(shown, improved ? best.file : null, baseline);
+    // Sab tries ka charge ek table me, taaki har photo ka number dikhe.
+    renderChargeTable(results, improved ? best.file : original, original, baseline);
     const target = cfg.target || 0;
     const targetNote = target ? (best.cost <= target
       ? ` Target ₹${target} mil gaya ✓`
@@ -1693,6 +1754,8 @@
       `priceInput: ${findPriceInput() ? cssPath(findPriceInput()) : "none"} frontSrc: ${short(frontSrc(), 60)}`,
       `buttons in dialogs: ${[...document.querySelectorAll(DIALOG_SEL)].filter(visible).flatMap((d) => [...d.querySelectorAll("button, [role=button]")]).map((b) => short(ownText(b), 25)).join(" | ") || "none"}`,
       "log:", ...[...log.children].slice(0, 15).map((li) => ` - ${li.textContent}`),
+      "charges (photo | frame | shipping):",
+      ...[...chargeTable.querySelectorAll("tbody tr")].map((tr) => ` - ${[...tr.children].map((td) => short(td.textContent, 70)).join(" | ")}`),
       `status: ${status.textContent}`,
     ];
     return lines.join("\n");
