@@ -1,6 +1,6 @@
 // Ranking / SEO feature (Meesho search + analysis).
 import {
-  searchMeesho, fetchProductPage, productIdFromUrl, isMeeshoProductUrl, buildRelatedKeywords, buildReport,
+  searchMeesho, fetchProductPage, productIdFromUrl, isMeeshoProductUrl, buildRelatedKeywords, buildReport, generateTitleAndDescription,
 } from "./seo.js";
 
 const MEESHO = "https://supplier.meesho.com/";
@@ -125,7 +125,10 @@ async function seoRank(msg) {
       searches.push(res);
     }
   }
-  return buildReport(user, searches, relatedKeywords);
+  const report = buildReport(user, searches, relatedKeywords);
+  // Generated title + description attach karo (content script seedha dikhayega)
+  report.generated = generateTitleAndDescription(user, report.analysis, keyword);
+  return report;
 }
 
 export async function handle(msg) {
